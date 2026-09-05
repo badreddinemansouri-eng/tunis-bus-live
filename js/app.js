@@ -33,26 +33,46 @@ const btnClearSearch = document.getElementById('btnClearSearch');
 const routeDetailPanel = document.getElementById('routeDetailPanel');
 const routeDetailContent = document.getElementById('routeDetailContent');
 const btnCloseDetail = document.getElementById('btnCloseDetail');
+const driverSearchInput = document.getElementById('driverSearchInput');
 
 // ==================== INIT ====================
 function init() {
+    console.log('🚀 App initializing...');
     loadRoutes();
     checkFirebaseConnection();
     setupSearch();
+    setupDriverSearch();
     btnClearSearch.addEventListener('click', clearSearch);
     btnCloseDetail.addEventListener('click', () => routeDetailPanel.classList.add('hidden'));
 }
 
 function loadRoutes() {
+    // First try to get from global routesData (from routes.js)
     if (typeof routesData !== 'undefined' && Array.isArray(routesData) && routesData.length > 0) {
         routeData = routesData;
-        console.log('Loaded local routes:', routeData.length);
-        populateRouteSelects();
-        // Also try to fetch additional from OSM as supplement
-        fetchRoutesFromOSM(true);
+        console.log('✅ Loaded local routes:', routeData.length);
     } else {
-        console.warn('No local routes found, fetching from OSM...');
+        // Try localStorage
+        const stored = localStorage.getItem('tunis_bus_routes');
+        if (stored) {
+            try {
+                routeData = JSON.parse(stored);
+                console.log('✅ Loaded routes from localStorage:', routeData.length);
+            } catch(e) {}
+        }
+    }
+
+    // If still empty, fallback to empty array
+    if (!routeData || routeData.length === 0) {
+        routeData = [];
+        console.warn('⚠️ No routes found – try fetching from OSM');
         fetchRoutesFromOSM(false);
+    }
+
+    populateRouteSelects();
+    // If we have routes, also try to fetch more from OSM as supplement
+    if (routeData.length > 0) {
+        fetchRoutesFromOSM(true);
     }
 }
 
@@ -131,22 +151,29 @@ function parseOSMData(osmData) {
 }
 
 function populateRouteSelects() {
+    if (!routeSelect) return;
     routeSelect.innerHTML = '<option value="">-- Choose Route --</option>';
+    if (routeData.length === 0) {
+        routeSelect.innerHTML = '<option value="">No routes available</option>';
+        return;
+    }
     routeData.forEach(route => {
         const opt = document.createElement('option');
         opt.value = route.id;
         opt.textContent = `${route.id} - ${route.name}`;
         routeSelect.appendChild(opt);
     });
+    console.log('✅ Populated route dropdown with', routeData.length, 'routes');
 }
 
 // ==================== RELIABLE CONNECTION CHECK ====================
 function checkFirebaseConnection() {
     const statusEl = document.getElementById('connectionStatus');
+    if (!statusEl) return;
     statusEl.textContent = 'Checking...';
     statusEl.className = 'connection-badge';
 
-    // Primary: Use a simple read to confirm the database is accessible
+    // Primary: Use a simple read to confirm database access
     firebase.database().ref('/').once('value')
         .then(() => {
             statusEl.textContent = 'Online ✅';
@@ -166,7 +193,6 @@ function checkFirebaseConnection() {
                 statusEl.textContent = 'Online ✅';
                 statusEl.className = 'connection-badge online';
             }
-            // Don't set offline here – we let the primary read test handle it
         });
     } catch (e) {
         // WebSocket might not be supported – ignore
@@ -212,7 +238,30 @@ function initMap() {
     legendControl.addTo(map);
 }
 
-// ==================== SEARCH ====================
+// ==================== DRIVER SEARCH (filter dropdown) ====================
+function setupDriverSearch() {
+    if (!driverSearchInput) return;
+    driverSearchInput.addEventListener('input', function() {
+        const query = this.value.trim().toLowerCase();
+        const options = routeSelect.options;
+        let hasVisible = false;
+        for (let i = 0; i < options.length; i++) {
+            const text = options[i].text.toLowerCase();
+            if (text.includes(query) || query === '') {
+                options[i].style.display = '';
+                hasVisible = true;
+            } else {
+                options[i].style.display = 'none';
+            }
+        }
+        // If no results, show a temporary message
+        if (!hasVisible && query.length > 0) {
+            // Add a placeholder if needed
+        }
+    });
+}
+
+// ==================== PASSENGER SEARCH ====================
 function setupSearch() {
     searchInput.addEventListener('input', handleSearch);
     chkRoutes.addEventListener('change', handleSearch);
