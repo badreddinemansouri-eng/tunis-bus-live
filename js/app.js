@@ -118,13 +118,16 @@ function populateRouteSelects() {
     routeSelect.innerHTML = '<option value="">-- Choose Route --</option>';
     passengerRouteSelect.innerHTML = '<option value="">-- All Buses --</option>';
     routeData.forEach(route => {
+        const optionText = `${route.id} - ${route.name}`;
+
         const opt1 = document.createElement('option');
         opt1.value = route.id;
-        opt1.textContent = `${route.id} - ${route.name}`;
+        opt1.textContent = optionText;
         routeSelect.appendChild(opt1);
+
         const opt2 = document.createElement('option');
         opt2.value = route.id;
-        opt2.textContent = `${route.id} - ${route.name}`;
+        opt2.textContent = optionText;
         passengerRouteSelect.appendChild(opt2);
     });
 }
@@ -178,6 +181,14 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
+// Check if the given lat,lng is within 500 meters of any stop of the route
+function isNearRoute(route, lat, lng) {
+    return route.stops.some(stop => {
+        const d = haversineDistance(lat, lng, stop.lat, stop.lng);
+        return d <= 0.5; // 500 meters
+    });
+}
+
 function autoDetectRoute(lat, lng) {
     if (routeData.length === 0) return null;
     let bestRoute = null, bestDirection = 'forward', bestDistance = Infinity;
@@ -199,50 +210,104 @@ btnStartTrip.addEventListener('click', startTrip);
 btnStopTrip.addEventListener('click', stopTrip);
 
 function startTrip() {
-    if (autoDetectionDone && currentRoute) { beginTrip(currentRoute, currentDirection); return; }
+    const selectedRouteId = routeSelect.value;
+    if (selectedRouteId) {
+        const route = routeData.find(r => r.id === selectedRouteId);
+        if (!route) {
+            alert('Selected route not found.');
+            return;
+        }
+        if (!navigator.geolocation) {
+            alert('Geolocation is not supported.');
+            return;
+        }
+        routeSelect.disabled = true;
+        directionSelect.disabled = true;
+        driverStatus.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking your location...';
+        navigator.geolocation.getCurrentPosition(position => {
+            const { latitude, longitude } = position.coords;
+            if (isNearRoute(route, latitude, longitude)) {
+                const direction = directionSelect.value;
+                currentRoute = route;
+                currentDirection = direction;
+                beginTrip(route, direction);
+            } else {
+                driverStatus.textContent = 'You are not near this route. Cannot start trip.';
+                routeSelect.disabled = false;
+                directionSelect.disabled = false;
+                alert('You must be near the route to start sharing. Please move to the route or select the correct one.');
+            }
+        }, error => {
+            driverStatus.textContent = 'Error getting location: ' + error.message;
+            routeSelect.disabled = false;
+            directionSelect.disabled = false;
+            alert('Failed to get your location. Check permissions and try again.');
+        }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+        return;
+    }
+
+    // No manual route selected: try auto-detection
     routeSelect.disabled = true;
     directionSelect.disabled = true;
     driverStatus.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Detecting your route...';
-    if (!navigator.geolocation) { alert('Geolocation not supported'); resetDriverUI(); return; }
+    if (!navigator.geolocation) {
+        alert('Geolocation not supported');
+        resetDriverUI();
+        return;
+    }
     navigator.geolocation.getCurrentPosition(position => {
         const { latitude, longitude } = position.coords;
         const detection = autoDetectRoute(latitude, longitude);
         if (detection) {
             currentRoute = detection.route;
             currentDirection = detection.direction;
-            autoDetectionDone = true;
             beginTrip(currentRoute, currentDirection);
         } else {
-            driverStatus.textContent = 'No route detected nearby. Please select manually.';
+            driverStatus.textContent = 'No route detected nearby. Please select a route manually.';
             routeSelect.disabled = false;
             directionSelect.disabled = false;
-            autoDetectionDone = false;
-            alert('Could not automatically detect route. Select manually.');
+            alert('Could not automatically detect route. Please select a route from the list and press Start Trip again.');
         }
     }, error => {
-        driverStatus.textContent = 'Error: ' + error.message;
+        driverStatus.textContent = 'Error getting location: ' + error.message;
         resetDriverUI();
+        alert('Failed to get location. Check permissions and try again, or select a route manually.');
     }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
 }
 
 function beginTrip(route, direction) {
     const driverName = document.getElementById('driverName').value.trim() || 'Unknown';
-    if (!route) { alert('No route selected.'); return; }
+    if (!route) {
+        alert('No route selected.');
+        return;
+    }
+
     currentTripId = `${route.id}_${Date.now()}`;
     firebase.database().ref(`activeBuses/${currentTripId}`).set({
-        routeId: route.id, direction, driverName,
+        routeId: route.id,
+        direction: direction,
+        driverName: driverName,
         startedAt: firebase.database.ServerValue.TIMESTAMP,
         lastUpdate: firebase.database.ServerValue.TIMESTAMP
-    }).catch(err => { console.error(err); alert('Failed to start trip.'); return; });
+    }).catch(err => {
+        console.error(err);
+        alert('Failed to start trip. Check Firebase connection.');
+        return;
+    });
+
     watchId = navigator.geolocation.watchPosition(position => {
         const { latitude, longitude, accuracy, heading, speed } = position.coords;
         firebase.database().ref(`activeBuses/${currentTripId}`).update({
-            lat: latitude, lng: longitude, accuracy, heading: heading||0, speed: speed||0,
+            lat: latitude,
+            lng: longitude,
+            accuracy: accuracy,
+            heading: heading || 0,
+            speed: speed || 0,
             lastUpdate: firebase.database.ServerValue.TIMESTAMP
         }).catch(err => console.error(err));
         driverStatus.innerHTML = `<i class="fas fa-broadcast-tower"></i> Sharing location (accuracy: ${Math.round(accuracy)}m)`;
     }, error => {
-        driverStatus.textContent = 'Error: ' + error.message;
+        driverStatus.textContent = 'Error getting location: ' + error.message;
     }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
 
     btnStartTrip.classList.add('hidden');
@@ -253,7 +318,10 @@ function beginTrip(route, direction) {
 }
 
 function stopTrip() {
-    if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+    if (watchId) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+    }
     if (currentTripId) {
         firebase.database().ref(`activeBuses/${currentTripId}`).remove().catch(console.error);
         currentTripId = null;
@@ -271,39 +339,127 @@ function resetDriverUI() {
     currentRoute = null;
 }
 
+// ==================== PASSENGER LOGIC WITH DUPLICATE MERGING ====================
 function listenToActiveBuses() {
     const ref = firebase.database().ref('activeBuses');
-    for (let id in markers) { map.removeLayer(markers[id]); delete markers[id]; }
+    for (let id in markers) {
+        map.removeLayer(markers[id]);
+        delete markers[id];
+    }
     activeBuses = {};
     if (routeLayerGroup) routeLayerGroup.clearLayers();
     updateBusList();
-    ref.on('child_added', snap => addOrUpdateBus(snap.key, snap.val()));
-    ref.on('child_changed', snap => addOrUpdateBus(snap.key, snap.val()));
+
+    ref.on('child_added', snap => {
+        const busData = snap.val();
+        busData.tripId = snap.key;
+        activeBuses[snap.key] = busData;
+        refreshPassengerView();
+    });
+
+    ref.on('child_changed', snap => {
+        const busData = snap.val();
+        busData.tripId = snap.key;
+        activeBuses[snap.key] = busData;
+        refreshPassengerView();
+    });
+
     ref.on('child_removed', snap => {
-        const id = snap.key;
-        if (markers[id]) { map.removeLayer(markers[id]); delete markers[id]; }
-        delete activeBuses[id];
-        updateBusList();
+        delete activeBuses[snap.key];
+        refreshPassengerView();
     });
 }
 
-function addOrUpdateBus(busId, data) {
-    if (!data.lat || !data.lng) return;
-    const { routeId, lat, lng, lastUpdate, driverName } = data;
-    const route = routeData.find(r => r.id === routeId);
-    let popup = `<b>Bus ${routeId}</b>`;
-    if (route) popup += `<br>${route.name}`;
-    if (driverName) popup += `<br>Driver: ${driverName}`;
-    popup += `<br>Updated: ${new Date(lastUpdate).toLocaleTimeString()}`;
-    if (markers[busId]) {
-        markers[busId].setLatLng([lat, lng]).setPopupContent(popup);
-    } else {
-        const icon = L.divIcon({ className: 'bus-marker', html: `<div class="bus-icon">${routeId}</div>`, iconSize: [34,34], iconAnchor: [17,17] });
-        markers[busId] = L.marker([lat,lng], { icon }).addTo(map).bindPopup(popup);
+function refreshPassengerView() {
+    const uniqueBuses = getUniqueBuses();
+    
+    for (let key in markers) {
+        if (!uniqueBuses.find(b => b.uniqueKey === key)) {
+            map.removeLayer(markers[key]);
+            delete markers[key];
+        }
     }
-    activeBuses[busId] = { ...data, lat, lng, routeId, lastUpdate, driverName };
+    
+    uniqueBuses.forEach(bus => {
+        const markerKey = bus.uniqueKey;
+        const routeId = bus.routeId;
+        const lat = bus.lat;
+        const lng = bus.lng;
+        const lastUpdate = bus.lastUpdate;
+        const driverName = bus.driverName;
+        const route = routeData.find(r => r.id === routeId);
+        
+        let popup = `<b>Bus ${routeId}</b>`;
+        if (route) popup += `<br>${route.name}`;
+        if (driverName) popup += `<br>Driver: ${driverName}`;
+        popup += `<br>Updated: ${new Date(lastUpdate).toLocaleTimeString()}`;
+        
+        if (markers[markerKey]) {
+            markers[markerKey].setLatLng([lat, lng]).setPopupContent(popup);
+        } else {
+            const icon = L.divIcon({
+                className: 'bus-marker',
+                html: `<div class="bus-icon">${routeId}</div>`,
+                iconSize: [34, 34],
+                iconAnchor: [17, 17]
+            });
+            markers[markerKey] = L.marker([lat, lng], { icon }).addTo(map).bindPopup(popup);
+        }
+    });
+    
     updateBusList();
     if (passengerRouteSelect.value) showRoutePath(passengerRouteSelect.value);
+}
+
+function getUniqueBuses() {
+    const buses = Object.values(activeBuses).filter(b => b.lat && b.lng && b.routeId);
+    const unique = [];
+    
+    buses.forEach(bus => {
+        const duplicateOf = unique.find(u => {
+            return u.routeId === bus.routeId &&
+                   haversineDistance(u.lat, u.lng, bus.lat, bus.lng) <= 0.05;
+        });
+        
+        if (!duplicateOf) {
+            bus.uniqueKey = bus.tripId;
+            unique.push(bus);
+        } else {
+            if (bus.lastUpdate > duplicateOf.lastUpdate) {
+                duplicateOf.lat = bus.lat;
+                duplicateOf.lng = bus.lng;
+                duplicateOf.lastUpdate = bus.lastUpdate;
+                duplicateOf.driverName = bus.driverName;
+                duplicateOf.accuracy = bus.accuracy;
+                duplicateOf.speed = bus.speed;
+                duplicateOf.heading = bus.heading;
+            }
+        }
+    });
+    
+    return unique;
+}
+
+function updateBusList() {
+    busListElement.innerHTML = '';
+    const filter = passengerRouteSelect.value;
+    const uniqueBuses = getUniqueBuses();
+    let hasBuses = false;
+    uniqueBuses.forEach(bus => {
+        if (filter && bus.routeId !== filter) return;
+        hasBuses = true;
+        const li = document.createElement('li');
+        const num = document.createElement('span');
+        num.className = 'bus-number';
+        num.textContent = bus.routeId;
+        const time = document.createElement('span');
+        time.className = 'eta';
+        time.innerHTML = `<i class="far fa-clock"></i> Updated ${new Date(bus.lastUpdate).toLocaleTimeString()}`;
+        li.appendChild(num);
+        li.appendChild(time);
+        busListElement.appendChild(li);
+    });
+    document.getElementById('noBuses').style.display = hasBuses ? 'none' : 'block';
 }
 
 function showRoutePath(routeId) {
@@ -314,28 +470,15 @@ function showRoutePath(routeId) {
     const latlngs = route.stops.map(s => [s.lat, s.lng]);
     const polyline = L.polyline(latlngs, { className: 'route-path' }).addTo(routeLayerGroup);
     route.stops.forEach(stop => {
-        L.circleMarker([stop.lat, stop.lng], { radius: 5, color: '#3498db', fillColor: '#fff', fillOpacity: 1, weight: 2 })
-            .addTo(routeLayerGroup).bindPopup(stop.name);
+        L.circleMarker([stop.lat, stop.lng], {
+            radius: 5,
+            color: '#3498db',
+            fillColor: '#fff',
+            fillOpacity: 1,
+            weight: 2
+        }).addTo(routeLayerGroup).bindPopup(stop.name);
     });
-    map.fitBounds(polyline.getBounds(), { padding: [20,20] });
-}
-
-function updateBusList() {
-    busListElement.innerHTML = '';
-    const filter = passengerRouteSelect.value;
-    let hasBuses = false;
-    for (let id in activeBuses) {
-        const bus = activeBuses[id];
-        if (filter && bus.routeId !== filter) continue;
-        hasBuses = true;
-        const li = document.createElement('li');
-        const num = document.createElement('span'); num.className = 'bus-number'; num.textContent = bus.routeId;
-        const time = document.createElement('span'); time.className = 'eta';
-        time.innerHTML = `<i class="far fa-clock"></i> Updated ${new Date(bus.lastUpdate).toLocaleTimeString()}`;
-        li.appendChild(num); li.appendChild(time);
-        busListElement.appendChild(li);
-    }
-    document.getElementById('noBuses').style.display = hasBuses ? 'none' : 'block';
+    map.fitBounds(polyline.getBounds(), { padding: [20, 20] });
 }
 
 btnRefreshBuses.addEventListener('click', () => {
@@ -346,13 +489,9 @@ btnRefreshBuses.addEventListener('click', () => {
 passengerRouteSelect.addEventListener('change', () => {
     updateBusList();
     const filter = passengerRouteSelect.value;
-    if (filter) showRoutePath(filter); else if (routeLayerGroup) routeLayerGroup.clearLayers();
-    for (let id in markers) {
-        const bus = activeBuses[id];
-        if (!bus) continue;
-        if (filter && bus.routeId !== filter) map.removeLayer(markers[id]);
-        else if (!map.hasLayer(markers[id])) markers[id].addTo(map);
-    }
+    if (filter) showRoutePath(filter);
+    else if (routeLayerGroup) routeLayerGroup.clearLayers();
+    refreshPassengerView();
 });
 
 window.addEventListener('DOMContentLoaded', init);
