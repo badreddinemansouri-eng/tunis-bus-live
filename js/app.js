@@ -79,39 +79,66 @@ function parseOSMData(osmData) {
     const nodes = {};
     const ways = {};
     const relations = {};
+
+    // Index all nodes, ways, and relations
     osmData.elements.forEach(el => {
         if (el.type === 'node') nodes[el.id] = el;
         else if (el.type === 'way') ways[el.id] = el;
         else if (el.type === 'relation') relations[el.id] = el;
     });
+
+    // Process each bus route relation
     Object.values(relations).forEach(rel => {
         if (rel.tags && rel.tags.route === 'bus') {
             const ref = rel.tags.ref || rel.id.toString();
             const name = rel.tags.name || `Bus ${ref}`;
             const stops = [];
+            const path = [];
+
+            // Extract stop nodes
             if (rel.members) {
                 rel.members.forEach(member => {
                     if ((member.role === 'stop' || member.role === 'platform') && nodes[member.ref]) {
                         const node = nodes[member.ref];
-                        if (node.lat && node.lon) stops.push({ name: node.tags?.name || 'Unknown', lat: node.lat, lng: node.lon });
+                        if (node.lat && node.lon) {
+                            stops.push({ name: node.tags?.name || 'Unknown', lat: node.lat, lng: node.lon });
+                        }
                     }
                 });
             }
-            if (stops.length === 0 && rel.members) {
-                const wayIds = rel.members.filter(m => m.type === 'way').map(m => m.ref);
-                wayIds.forEach(wayId => {
-                    const way = ways[wayId];
+
+            // Build path from ordered way members
+            if (rel.members) {
+                const wayMembers = rel.members.filter(m => m.type === 'way');
+                wayMembers.forEach(member => {
+                    const way = ways[member.ref];
                     if (way && way.nodes) {
                         way.nodes.forEach(nodeId => {
                             const node = nodes[nodeId];
-                            if (node && node.lat && node.lon && node.tags?.name) stops.push({ name: node.tags.name, lat: node.lat, lng: node.lon });
+                            if (node && node.lat && node.lon) {
+                                path.push([node.lat, node.lon]);
+                            }
                         });
                     }
                 });
             }
-            if (stops.length > 0) routes.push({ id: ref, name, stops });
+
+            // If no path, fallback to connecting stops
+            if (path.length === 0 && stops.length > 1) {
+                stops.forEach(stop => path.push([stop.lat, stop.lng]));
+            }
+
+            if (stops.length > 0) {
+                routes.push({
+                    id: ref,
+                    name: name,
+                    stops: stops,
+                    path: path
+                });
+            }
         }
     });
+
     return routes;
 }
 
@@ -167,30 +194,32 @@ function switchTab(tab) {
 
 function initMap() {
     if (map) return;
+    // Use a clean, modern basemap (CartoDB Positron)
     map = L.map('map', { zoomControl: true }).setView([36.8065, 10.1815], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors'
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        attribution: '© OpenStreetMap contributors © CARTO',
+        subdomains: 'abcd',
+        maxZoom: 19
     }).addTo(map);
+
     routeLayerGroup = L.layerGroup().addTo(map);
 
-    // Add legend control
+    // Add scale bar
+    L.control.scale({ metric: true, imperial: false }).addTo(map);
+
+    // Add legend
     legendControl = L.control({ position: 'bottomleft' });
     legendControl.onAdd = function() {
         const div = L.DomUtil.create('div', 'map-legend');
         div.innerHTML = `
             <strong>Legend</strong><br>
             <span style="color:#3498db;">●</span> Route path<br>
-            <span style="color:#fff; border:2px solid #3498db; border-radius:50%; display:inline-block; width:10px; height:10px;"></span> Stop<br>
+            <span style="background:#fff; border:2px solid #3498db; border-radius:50%; display:inline-block; width:10px; height:10px;"></span> Stop<br>
             <span style="background:#f9a826; color:white; padding:2px 6px; border-radius:10px;">1</span> Bus
         `;
         return div;
     };
     legendControl.addTo(map);
-
-    // Add fullscreen button if available
-    if (L.control.fullscreen) {
-        L.control.fullscreen({ position: 'topright' }).addTo(map);
-    }
 }
 
 function haversineDistance(lat1, lon1, lat2, lon2) {
@@ -486,20 +515,23 @@ function showRoutePath(routeId) {
     if (!routeLayerGroup) return;
     routeLayerGroup.clearLayers();
     const route = routeData.find(r => r.id === routeId);
-    if (!route || route.stops.length < 2) return;
+    if (!route) return;
+
+    // Use route.path if available (accurate OSM geometry), otherwise fallback to stops
+    const pathCoords = route.path && route.path.length > 1 ? route.path : route.stops.map(s => [s.lat, s.lng]);
+    if (pathCoords.length < 2) return;
 
     // Draw white outline for the route (background)
-    const outlineLatLngs = route.stops.map(s => [s.lat, s.lng]);
-    L.polyline(outlineLatLngs, {
+    L.polyline(pathCoords, {
         className: 'route-outline',
         color: '#ffffff',
         weight: 8,
-        opacity: 0.6,
+        opacity: 0.7,
         lineJoin: 'round'
     }).addTo(routeLayerGroup);
 
     // Draw main route line
-    const polyline = L.polyline(outlineLatLngs, {
+    const polyline = L.polyline(pathCoords, {
         className: 'route-path',
         color: '#3498db',
         weight: 4,
