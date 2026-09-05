@@ -6,13 +6,13 @@
     <title>Tunis Bus Live</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="css/style.css?v=10">
+    <link rel="stylesheet" href="css/style.css?v=16">
 
-    <!-- Eruda: Mobile Console (remove in production if you want) -->
+    <!-- Eruda: mobile console (remove in production if you want) -->
     <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
     <script>eruda.init();</script>
 
-    <!-- Firebase SDKs -->
+    <!-- Firebase SDKs (compat) -->
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 </head>
@@ -36,7 +36,7 @@
                 <label for="driverName">Your Name (optional)</label>
                 <input type="text" id="driverName" placeholder="e.g., Ahmed" autocomplete="name">
 
-                <!-- Driver search input -->
+                <!-- Driver search input – filters the dropdown -->
                 <div class="search-input" style="margin-top:8px;">
                     <i class="fas fa-magnifying-glass"></i>
                     <input type="text" id="driverSearchInput" placeholder="Search route..." autocomplete="off">
@@ -92,12 +92,12 @@
         </section>
     </div>
 
-    <!-- Leaflet -->
+    <!-- Leaflet.js -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <!-- Our scripts (versioned to bust cache) -->
-    <script src="js/firebase-config.js?v=10"></script>
-    <script src="js/routes.js?v=10"></script>
-    <script src="js/app.js?v=10"></script>
+    <script src="js/firebase-config.js?v=16"></script>
+    <script src="js/routes.js?v=16"></script>
+    <script src="js/app.js?v=16"></script>
 </body>
 </html>
