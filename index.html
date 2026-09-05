@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Tunis Bus Live</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Firebase compat SDK -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>🚌 Tunis Bus Live</h1>
+            <nav>
+                <button id="tabDriver" class="tab-btn active">I'm Driving</button>
+                <button id="tabPassenger" class="tab-btn">I'm Waiting</button>
+            </nav>
+        </header>
+
+        <!-- Driver View -->
+        <section id="driverView" class="view active">
+            <div class="card">
+                <h2>Driver Panel</h2>
+                <label for="driverName">Your Name (optional)</label>
+                <input type="text" id="driverName" placeholder="e.g., Ahmed">
+                <label for="routeSelect">Select Route</label>
+                <select id="routeSelect">
+                    <option value="">-- Loading routes... --</option>
+                </select>
+                <label for="directionSelect">Direction</label>
+                <select id="directionSelect">
+                    <option value="forward">Forward (first to last stop)</option>
+                    <option value="backward">Backward (last to first stop)</option>
+                </select>
+                <button id="btnStartTrip" class="primary">Start Trip & Share Location</button>
+                <button id="btnStopTrip" class="danger hidden">Stop Trip</button>
+                <div id="driverStatus" class="status"></div>
+            </div>
+        </section>
+
+        <!-- Passenger View -->
+        <section id="passengerView" class="view">
+            <div class="card">
+                <h2>Find Your Bus</h2>
+                <label for="passengerRouteSelect">Choose Bus Line</label>
+                <select id="passengerRouteSelect">
+                    <option value="">-- All Buses --</option>
+                </select>
+                <button id="btnRefreshBuses" class="secondary">Refresh</button>
+            </div>
+            <div id="map"></div>
+            <div id="busListContainer">
+                <h3>Active Buses</h3>
+                <ul id="busList"></ul>
+            </div>
+        </section>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="js/firebase-config.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
