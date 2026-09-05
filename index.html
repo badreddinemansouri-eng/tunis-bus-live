@@ -18,8 +18,8 @@
                 <span id="connectionStatus" class="connection-badge">Connecting...</span>
             </div>
             <nav class="tabs">
-                <button id="tabDriver" class="tab-btn active"><i class="fas fa-steering-wheel"></i> I'm Driving</button>
-                <button id="tabPassenger" class="tab-btn"><i class="fas fa-person-waiting"></i> I'm Waiting</button>
+                <button id="tabDriver" class="tab-btn active"><i class="fas fa-steering-wheel"></i> Driver</button>
+                <button id="tabPassenger" class="tab-btn"><i class="fas fa-person-waiting"></i> Passenger</button>
             </nav>
         </header>
 
@@ -41,7 +41,7 @@
                         </select>
                     </div>
                 </div>
-                <button id="btnStartTrip" class="btn btn-primary btn-block"><i class="fas fa-play"></i> Start Trip & Share Location</button>
+                <button id="btnStartTrip" class="btn btn-primary btn-block"><i class="fas fa-play"></i> Start Trip & Share</button>
                 <button id="btnStopTrip" class="btn btn-danger btn-block hidden"><i class="fas fa-stop"></i> Stop Trip</button>
                 <div id="driverStatus" class="status-box"></div>
             </div>
@@ -49,13 +49,18 @@
 
         <section id="passengerView" class="view">
             <div class="card search-card">
-                <h2><i class="fas fa-search"></i> Find Your Bus</h2>
+                <h2><i class="fas fa-search"></i> Find Your Bus or Stop</h2>
                 <div class="search-row">
                     <div class="search-input">
-                        <i class="fas fa-filter"></i>
-                        <select id="passengerRouteSelect"><option value="">-- All Buses --</option></select>
+                        <i class="fas fa-magnifying-glass"></i>
+                        <input type="text" id="searchInput" placeholder="Search route or stop name..." autocomplete="off">
                     </div>
-                    <button id="btnRefreshBuses" class="btn btn-secondary"><i class="fas fa-sync-alt"></i> Refresh</button>
+                    <button id="btnClearSearch" class="btn btn-secondary" style="width:auto; padding:12px 18px;"><i class="fas fa-times"></i></button>
+                </div>
+                <div id="searchResults" class="search-results hidden"></div>
+                <div class="search-filter">
+                    <label><input type="checkbox" id="chkRoutes" checked> Routes</label>
+                    <label><input type="checkbox" id="chkStops" checked> Stops</label>
                 </div>
             </div>
             <div id="map"></div>
@@ -63,6 +68,11 @@
                 <h3><i class="fas fa-list"></i> Active Buses</h3>
                 <ul id="busList"></ul>
                 <div id="noBuses" class="empty-state"><i class="fas fa-bus-simple"></i><p>No active buses right now.</p></div>
+            </div>
+            <div id="routeDetailPanel" class="card route-detail hidden">
+                <h3><i class="fas fa-route"></i> Route Details</h3>
+                <div id="routeDetailContent"></div>
+                <button id="btnCloseDetail" class="btn btn-secondary" style="width:auto; margin-top:10px;"><i class="fas fa-times"></i> Close</button>
             </div>
         </section>
     </div>
