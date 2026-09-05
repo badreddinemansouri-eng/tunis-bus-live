@@ -1,7 +1,7 @@
 const firebaseConfig = {
   apiKey: "AIzaSyABoGayaVI3Tl-3zbc6kWpz9U5b63eBq8s",
   authDomain: "tunis-bus-live.firebaseapp.com",
-  databaseURL: "https://tunis-bus-live-default-rtdb.europe-west1.firebasedatabase.app",   // ← CHANGE TO THIS
+  databaseURL: "https://tunis-bus-live-default-rtdb.europe-west1.firebasedatabase.app",   // ← THIS IS THE RIGHT ONE
   projectId: "tunis-bus-live",
   storageBucket: "tunis-bus-live.firebasestorage.app",
   messagingSenderId: "205154018267",
@@ -9,5 +9,5 @@ const firebaseConfig = {
   measurementId: "G-3SLJKW1BEC"
 };
 
-// Make sure we initialize the app
+// Initialize the app
 firebase.initializeApp(firebaseConfig);
