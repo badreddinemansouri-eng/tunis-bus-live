@@ -10,7 +10,6 @@ let currentDirection = 'forward';
 let autoDetectionDone = false;
 let routeLayerGroup = null;
 
-// DOM elements
 const driverView = document.getElementById('driverView');
 const passengerView = document.getElementById('passengerView');
 const tabDriver = document.getElementById('tabDriver');
@@ -25,23 +24,21 @@ const btnRefreshBuses = document.getElementById('btnRefreshBuses');
 const busListElement = document.getElementById('busList');
 const connectionStatus = document.getElementById('connectionStatus');
 
-// ==================== INITIAL LOAD ====================
 function init() {
     loadRoutes();
     checkFirebaseConnection();
 }
 
 function loadRoutes() {
-    if (typeof routesData !== 'undefined' && Array.isArray(routesData)) {
+    if (typeof routesData !== 'undefined' && Array.isArray(routesData) && routesData.length > 0) {
         routeData = routesData;
+        console.log('Loaded local routes:', routeData.length);
+        populateRouteSelects();
+        fetchRoutesFromOSM(true);
     } else {
-        console.warn('routes.json not loaded, attempting OSM fetch...');
-        fetchRoutesFromOSM();
-        return;
+        console.warn('No local routes found, fetching from OSM...');
+        fetchRoutesFromOSM(false);
     }
-    populateRouteSelects();
-    // Optionally supplement with OSM
-    fetchRoutesFromOSM(true); // merge with existing
 }
 
 async function fetchRoutesFromOSM(supplement = false) {
@@ -53,20 +50,23 @@ async function fetchRoutesFromOSM(supplement = false) {
         const osmRoutes = parseOSMData(data);
         if (osmRoutes.length > 0) {
             if (supplement) {
-                // Merge with existing routeData (prefer local if same id)
+                let added = 0;
                 osmRoutes.forEach(osmRoute => {
                     if (!routeData.find(r => r.id === osmRoute.id)) {
                         routeData.push(osmRoute);
+                        added++;
                     }
                 });
-                console.log(`Merged OSM routes: ${osmRoutes.length}, total: ${routeData.length}`);
+                if (added > 0) {
+                    console.log(`Added ${added} new routes from OSM, total: ${routeData.length}`);
+                    populateRouteSelects();
+                }
             } else {
                 routeData = osmRoutes;
+                console.log('Fetched routes from OSM:', routeData.length);
+                populateRouteSelects();
             }
-            populateRouteSelects();
-            if (routeData.length > 0) {
-                localStorage.setItem('tunis_bus_routes', JSON.stringify(routeData));
-            }
+            if (routeData.length > 0) localStorage.setItem('tunis_bus_routes', JSON.stringify(routeData));
         }
     } catch (e) {
         console.warn('OSM fetch failed, using local data only.', e);
@@ -92,9 +92,7 @@ function parseOSMData(osmData) {
                 rel.members.forEach(member => {
                     if ((member.role === 'stop' || member.role === 'platform') && nodes[member.ref]) {
                         const node = nodes[member.ref];
-                        if (node.lat && node.lon) {
-                            stops.push({ name: node.tags?.name || 'Unknown', lat: node.lat, lng: node.lon });
-                        }
+                        if (node.lat && node.lon) stops.push({ name: node.tags?.name || 'Unknown', lat: node.lat, lng: node.lon });
                     }
                 });
             }
@@ -105,9 +103,7 @@ function parseOSMData(osmData) {
                     if (way && way.nodes) {
                         way.nodes.forEach(nodeId => {
                             const node = nodes[nodeId];
-                            if (node && node.lat && node.lon && node.tags?.name) {
-                                stops.push({ name: node.tags.name, lat: node.lat, lng: node.lon });
-                            }
+                            if (node && node.lat && node.lon && node.tags?.name) stops.push({ name: node.tags.name, lat: node.lat, lng: node.lon });
                         });
                     }
                 });
@@ -146,7 +142,6 @@ function checkFirebaseConnection() {
     });
 }
 
-// ==================== TAB SWITCHING ====================
 tabDriver.addEventListener('click', () => switchTab('driver'));
 tabPassenger.addEventListener('click', () => switchTab('passenger'));
 
@@ -166,7 +161,6 @@ function switchTab(tab) {
     }
 }
 
-// ==================== MAP INITIALIZATION ====================
 function initMap() {
     if (map) return;
     map = L.map('map').setView([36.8065, 10.1815], 12);
@@ -176,7 +170,6 @@ function initMap() {
     routeLayerGroup = L.layerGroup().addTo(map);
 }
 
-// ==================== HAVERSINE ====================
 function haversineDistance(lat1, lon1, lat2, lon2) {
     const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -185,25 +178,23 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
-// ==================== AUTO-DETECT ROUTE ====================
 function autoDetectRoute(lat, lng) {
     if (routeData.length === 0) return null;
     let bestRoute = null, bestDirection = 'forward', bestDistance = Infinity;
     routeData.forEach(route => {
-        if (route.stops.length > 0) {
-            const firstStop = route.stops[0];
-            const dForward = haversineDistance(lat, lng, firstStop.lat, firstStop.lng);
-            if (dForward < bestDistance) { bestDistance = dForward; bestRoute = route; bestDirection = 'forward'; }
-            const lastStop = route.stops[route.stops.length-1];
-            const dBackward = haversineDistance(lat, lng, lastStop.lat, lastStop.lng);
-            if (dBackward < bestDistance) { bestDistance = dBackward; bestRoute = route; bestDirection = 'backward'; }
-        }
+        route.stops.forEach((stop, index) => {
+            const d = haversineDistance(lat, lng, stop.lat, stop.lng);
+            if (d < bestDistance) {
+                bestDistance = d;
+                bestRoute = route;
+                bestDirection = (index < route.stops.length / 2) ? 'forward' : 'backward';
+            }
+        });
     });
     if (bestDistance > 0.5) return null;
     return { route: bestRoute, direction: bestDirection };
 }
 
-// ==================== DRIVER LOGIC ====================
 btnStartTrip.addEventListener('click', startTrip);
 btnStopTrip.addEventListener('click', stopTrip);
 
@@ -280,10 +271,8 @@ function resetDriverUI() {
     currentRoute = null;
 }
 
-// ==================== PASSENGER LOGIC ====================
 function listenToActiveBuses() {
     const ref = firebase.database().ref('activeBuses');
-    // Clear existing
     for (let id in markers) { map.removeLayer(markers[id]); delete markers[id]; }
     activeBuses = {};
     if (routeLayerGroup) routeLayerGroup.clearLayers();
@@ -366,5 +355,4 @@ passengerRouteSelect.addEventListener('change', () => {
     }
 });
 
-// ==================== START ====================
 window.addEventListener('DOMContentLoaded', init);
