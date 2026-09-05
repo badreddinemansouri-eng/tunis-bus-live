@@ -7,6 +7,7 @@ let currentTripId = null;    // Driver's active trip ID
 let watchId = null;          // Geolocation watch ID
 let currentRoute = null;     // Driver's selected route
 let currentDirection = 'forward';
+let autoDetectionDone = false; // Flag to prevent repeated detection
 
 // DOM elements
 const driverView = document.getElementById('driverView');
@@ -22,27 +23,44 @@ const driverStatus = document.getElementById('driverStatus');
 const btnRefreshBuses = document.getElementById('btnRefreshBuses');
 const busListElement = document.getElementById('busList');
 
-// ==================== LOAD ROUTES FROM OSM ====================
+// ==================== LOAD ROUTES FROM OSM + MANUAL ====================
 async function loadRoutesFromOSM() {
     try {
+        // Bounding box for Greater Tunis (approximate)
+        const bbox = {
+            south: 36.7000,
+            west: 10.0000,
+            north: 37.0000,
+            east: 10.4000
+        };
+
+        // Query all bus route relations that have at least one stop within bbox
         const query = `
-            [out:json][timeout:25];
-            area["name"="تونس"]->.tunis;
+            [out:json][timeout:60];
             (
-                relation["type"="route"]["route"="bus"](area.tunis);
+                node["highway"="bus_stop"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+                node["public_transport"="platform"]["bus"="yes"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
             );
+            node._ -> .stops;
+            .stops <;
+            relation(bn.stops)["type"="route"]["route"="bus"];
             out body;
             >;
             out skel qt;
         `;
+
         const response = await fetch('https://overpass-api.de/api/interpreter', {
             method: 'POST',
             body: 'data=' + encodeURIComponent(query)
         });
         const data = await response.json();
         routeData = parseOSMData(data);
+
+        // Load manual routes if available
+        await loadManualRoutes();
+
         if (routeData.length === 0) {
-            // Fallback: use a sample route so app still works
+            // Fallback: demo route
             routeData = [{
                 id: '1',
                 name: 'Tunis Centre - La Marsa (Demo)',
@@ -54,7 +72,7 @@ async function loadRoutesFromOSM() {
                     { name: 'La Marsa', lat: 36.8765, lng: 10.3250 }
                 ]
             }];
-            console.warn('No real routes found, using demo route.');
+            console.warn('No routes found, using demo route.');
         }
         populateRouteSelects();
     } catch (error) {
@@ -72,6 +90,25 @@ async function loadRoutesFromOSM() {
             ]
         }];
         populateRouteSelects();
+    }
+}
+
+async function loadManualRoutes() {
+    try {
+        const response = await fetch('js/routes_manual.json');
+        if (!response.ok) return;
+        const manualData = await response.json();
+        manualData.forEach(manualRoute => {
+            const index = routeData.findIndex(r => r.id === manualRoute.id);
+            if (index >= 0) {
+                routeData[index] = manualRoute;
+            } else {
+                routeData.push(manualRoute);
+            }
+        });
+        console.log(`Loaded ${manualData.length} manual routes.`);
+    } catch (error) {
+        console.warn('No manual routes file found or error loading it:', error);
     }
 }
 
@@ -149,7 +186,7 @@ function parseOSMData(osmData) {
 }
 
 function populateRouteSelects() {
-    // Populate driver route select
+    // Populate driver route select (only used if auto-detection fails)
     routeSelect.innerHTML = '<option value="">-- Choose Route --</option>';
     passengerRouteSelect.innerHTML = '<option value="">-- All Buses --</option>';
     routeData.forEach(route => {
@@ -191,38 +228,122 @@ function initMap() {
     }).addTo(map);
 }
 
+// ==================== HAVERSINE DISTANCE ====================
+function haversineDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c; // distance in km
+}
+
+// ==================== AUTO-DETECT ROUTE ====================
+function autoDetectRoute(lat, lng) {
+    if (routeData.length === 0) return null;
+    
+    let bestRoute = null;
+    let bestDirection = 'forward';
+    let bestDistance = Infinity;
+
+    routeData.forEach(route => {
+        // Check distance to first stop (forward direction)
+        if (route.stops.length > 0) {
+            const firstStop = route.stops[0];
+            const dForward = haversineDistance(lat, lng, firstStop.lat, firstStop.lng);
+            if (dForward < bestDistance) {
+                bestDistance = dForward;
+                bestRoute = route;
+                bestDirection = 'forward';
+            }
+            // Check distance to last stop (backward direction)
+            const lastStop = route.stops[route.stops.length - 1];
+            const dBackward = haversineDistance(lat, lng, lastStop.lat, lastStop.lng);
+            if (dBackward < bestDistance) {
+                bestDistance = dBackward;
+                bestRoute = route;
+                bestDirection = 'backward';
+            }
+        }
+    });
+
+    // If the nearest stop is more than 500 meters away, assume no route detected
+    if (bestDistance > 0.5) { // 500 meters threshold
+        return null;
+    }
+    return { route: bestRoute, direction: bestDirection };
+}
+
 // ==================== DRIVER LOGIC ====================
 btnStartTrip.addEventListener('click', startTrip);
 btnStopTrip.addEventListener('click', stopTrip);
 
 function startTrip() {
-    const routeId = routeSelect.value;
-    const direction = directionSelect.value;
+    // If auto-detection already done, just use existing route
+    if (autoDetectionDone && currentRoute) {
+        beginTrip(currentRoute, currentDirection);
+        return;
+    }
+
+    // First, hide manual selection and show status
+    routeSelect.disabled = true;
+    directionSelect.disabled = true;
+    driverStatus.textContent = 'Detecting your route...';
+
+    if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser.');
+        resetDriverUI();
+        return;
+    }
+
+    // Get current position for auto-detection
+    navigator.geolocation.getCurrentPosition(
+        position => {
+            const { latitude, longitude } = position.coords;
+            const detection = autoDetectRoute(latitude, longitude);
+            if (detection) {
+                currentRoute = detection.route;
+                currentDirection = detection.direction;
+                autoDetectionDone = true;
+                beginTrip(currentRoute, currentDirection);
+            } else {
+                // No route detected, fall back to manual selection
+                driverStatus.textContent = 'No route detected nearby. Please select manually.';
+                routeSelect.disabled = false;
+                directionSelect.disabled = false;
+                autoDetectionDone = false;
+                alert('Could not automatically detect route. Please select your route and direction manually, then press "Start Trip" again.');
+            }
+        },
+        error => {
+            console.error('Geolocation error:', error);
+            driverStatus.textContent = 'Error getting location: ' + error.message;
+            resetDriverUI();
+            alert('Failed to get location. Check permissions and try again.');
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+}
+
+function beginTrip(route, direction) {
     const driverName = document.getElementById('driverName').value.trim() || 'Unknown';
 
-    if (!routeId) {
-        alert('Please select a route.');
-        return;
-    }
-
-    const route = routeData.find(r => r.id === routeId);
     if (!route) {
-        alert('Invalid route selected.');
+        alert('No route selected.');
         return;
     }
-
-    currentRoute = route;
-    currentDirection = direction;
 
     if (!navigator.geolocation) {
         alert('Geolocation is not supported by your browser.');
         return;
     }
 
-    currentTripId = `${routeId}_${Date.now()}`;
+    currentTripId = `${route.id}_${Date.now()}`;
 
     firebase.database().ref(`activeBuses/${currentTripId}`).set({
-        routeId: routeId,
+        routeId: route.id,
         direction: direction,
         driverName: driverName,
         startedAt: firebase.database.ServerValue.TIMESTAMP,
@@ -258,7 +379,7 @@ function startTrip() {
     btnStopTrip.classList.remove('hidden');
     routeSelect.disabled = true;
     directionSelect.disabled = true;
-    driverStatus.textContent = 'Starting trip...';
+    driverStatus.textContent = `Trip started on ${route.id} (${route.name}) – ${direction}`;
 }
 
 function stopTrip() {
@@ -271,11 +392,17 @@ function stopTrip() {
             .catch(err => console.error('Error removing trip:', err));
         currentTripId = null;
     }
+    resetDriverUI();
+    driverStatus.textContent = 'Trip ended.';
+}
+
+function resetDriverUI() {
     btnStartTrip.classList.remove('hidden');
     btnStopTrip.classList.add('hidden');
     routeSelect.disabled = false;
     directionSelect.disabled = false;
-    driverStatus.textContent = 'Trip ended.';
+    autoDetectionDone = false;
+    currentRoute = null;
 }
 
 // ==================== PASSENGER LOGIC ====================
