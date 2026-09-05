@@ -7,10 +7,8 @@ let currentTripId = null;
 let watchId = null;
 let currentRoute = null;
 let currentDirection = 'forward';
-let autoDetectionDone = false;
 let routeLayerGroup = null;
 let legendControl = null;
-let stopMarkers = {};
 let searchResults = [];
 
 // DOM refs
@@ -59,8 +57,6 @@ function loadRoutes() {
 }
 
 async function fetchRoutesFromOSM(supplement = false) {
-    // Same as before – keep existing logic
-    // (We already have routesData; this is just a fallback)
     try {
         const bbox = { south: 36.6, west: 9.9, north: 37.1, east: 10.5 };
         const query = `[out:json][timeout:30];(node["highway"="bus_stop"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});node["public_transport"="platform"]["bus"="yes"](${bbox.south},${bbox.west},${bbox.north},${bbox.east}););node._ -> .stops;.stops <;relation(bn.stops)["type"="route"]["route"="bus"];out body;>;out skel qt;`;
@@ -93,7 +89,6 @@ async function fetchRoutesFromOSM(supplement = false) {
 }
 
 function parseOSMData(osmData) {
-    // Same as before – parse OSM into routes array
     const routes = [];
     const nodes = {};
     const ways = {};
@@ -145,17 +140,37 @@ function populateRouteSelects() {
     });
 }
 
+// ==================== RELIABLE CONNECTION CHECK ====================
 function checkFirebaseConnection() {
-    const connectedRef = firebase.database().ref('.info/connected');
-    connectedRef.on('value', (snap) => {
-        if (snap.val() === true) {
-            connectionStatus.textContent = 'Online';
-            connectionStatus.className = 'connection-badge online';
-        } else {
-            connectionStatus.textContent = 'Offline';
-            connectionStatus.className = 'connection-badge offline';
-        }
-    });
+    const statusEl = document.getElementById('connectionStatus');
+    statusEl.textContent = 'Checking...';
+    statusEl.className = 'connection-badge';
+
+    // Primary: Use a simple read to confirm the database is accessible
+    firebase.database().ref('/').once('value')
+        .then(() => {
+            statusEl.textContent = 'Online ✅';
+            statusEl.className = 'connection-badge online';
+            console.log('✅ Database reachable via REST');
+        })
+        .catch((err) => {
+            statusEl.textContent = 'Offline ❌';
+            statusEl.className = 'connection-badge offline';
+            console.error('❌ Database read failed:', err);
+        });
+
+    // Secondary: Listen to .info/connected for real-time changes (WebSocket)
+    try {
+        firebase.database().ref('.info/connected').on('value', (snap) => {
+            if (snap.val() === true) {
+                statusEl.textContent = 'Online ✅';
+                statusEl.className = 'connection-badge online';
+            }
+            // Don't set offline here – we let the primary read test handle it
+        });
+    } catch (e) {
+        // WebSocket might not be supported – ignore
+    }
 }
 
 // ==================== TAB SWITCHING ====================
@@ -202,8 +217,6 @@ function setupSearch() {
     searchInput.addEventListener('input', handleSearch);
     chkRoutes.addEventListener('change', handleSearch);
     chkStops.addEventListener('change', handleSearch);
-    // Also route detail close button
-    btnCloseDetail.addEventListener('click', () => routeDetailPanel.classList.add('hidden'));
 }
 
 function handleSearch() {
@@ -240,7 +253,6 @@ function handleSearch() {
         });
     }
 
-    // Sort: routes first, then stops
     results.sort((a,b) => {
         if (a.type === 'route' && b.type === 'stop') return -1;
         if (a.type === 'stop' && b.type === 'route') return 1;
@@ -270,7 +282,6 @@ function handleSearch() {
     searchResultsContainer.innerHTML = html;
     searchResultsContainer.classList.remove('hidden');
 
-    // Add click listeners
     searchResultsContainer.querySelectorAll('.search-result-item').forEach(el => {
         el.addEventListener('click', function() {
             const type = this.dataset.type;
@@ -300,19 +311,15 @@ function clearSearch() {
 function showRoute(routeId) {
     const route = routeData.find(r => r.id === routeId);
     if (!route) return;
-    // Clear previous route layers
     if (routeLayerGroup) routeLayerGroup.clearLayers();
-    // Draw route path
     let pathCoords = route.path && route.path.length > 1 ? route.path : null;
     if (!pathCoords) {
-        // Use stops to create path (simple polyline)
         pathCoords = route.stops.map(s => [s.lat, s.lng]);
     }
     if (pathCoords && pathCoords.length > 1) {
         L.polyline(pathCoords, { className: 'route-outline', color: '#fff', weight: 8, opacity: 0.7 }).addTo(routeLayerGroup);
         L.polyline(pathCoords, { className: 'route-path', color: '#3498db', weight: 4, opacity: 0.9 }).addTo(routeLayerGroup);
     }
-    // Add stop markers
     route.stops.forEach((stop, i) => {
         const marker = L.circleMarker([stop.lat, stop.lng], {
             radius: (i===0||i===route.stops.length-1)?8:6,
@@ -323,13 +330,11 @@ function showRoute(routeId) {
         }).addTo(routeLayerGroup);
         marker.bindPopup(`<b>${stop.name}</b>`);
     });
-    // Fit bounds
     if (pathCoords.length > 0) {
         const bounds = L.latLngBounds(pathCoords);
         map.fitBounds(bounds, { padding: [40, 40] });
     }
 
-    // Show detail panel
     routeDetailContent.innerHTML = `
         <h4>${route.id} - ${route.name}</h4>
         <p><strong>Stops:</strong> ${route.stops.length}</p>
@@ -342,11 +347,8 @@ function showRoute(routeId) {
 
 function focusStop(lat, lng, name) {
     map.setView([lat, lng], 16);
-    // Add a temporary marker
     const marker = L.marker([lat, lng]).addTo(map);
     marker.bindPopup(`<b>${name}</b>`).openPopup();
-    // Remove after 5 seconds? but we can keep it.
-    // Also highlight routes that contain this stop
     const routesWithStop = routeData.filter(r => r.stops.some(s => s.lat === lat && s.lng === lng));
     if (routesWithStop.length > 0) {
         routeDetailContent.innerHTML = `
@@ -469,7 +471,6 @@ function resetDriverUI() {
     btnStopTrip.classList.add('hidden');
     routeSelect.disabled = false;
     directionSelect.disabled = false;
-    autoDetectionDone = false;
     currentRoute = null;
 }
 
@@ -508,7 +509,7 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
 // ==================== PASSENGER FUNCTIONS ====================
 function listenToActiveBuses() {
     const ref = firebase.database().ref('activeBuses');
-    for (let id in markers) { map.removeLayer(markers[id]); delete markers[id]; }
+    for (let id in markers) { if (map) map.removeLayer(markers[id]); delete markers[id]; }
     activeBuses = {};
     if (routeLayerGroup) routeLayerGroup.clearLayers();
     updateBusList();
@@ -520,7 +521,7 @@ function listenToActiveBuses() {
 function refreshPassengerView() {
     const uniqueBuses = getUniqueBuses();
     for (let key in markers) {
-        if (!uniqueBuses.find(b => b.uniqueKey === key)) { map.removeLayer(markers[key]); delete markers[key]; }
+        if (!uniqueBuses.find(b => b.uniqueKey === key)) { if (map) map.removeLayer(markers[key]); delete markers[key]; }
     }
     uniqueBuses.forEach(bus => {
         const markerKey = bus.uniqueKey;
