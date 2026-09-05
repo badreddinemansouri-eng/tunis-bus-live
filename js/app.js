@@ -9,6 +9,7 @@ let currentRoute = null;
 let currentDirection = 'forward';
 let autoDetectionDone = false;
 let routeLayerGroup = null;
+let legendControl = null;
 
 const driverView = document.getElementById('driverView');
 const passengerView = document.getElementById('passengerView');
@@ -166,11 +167,30 @@ function switchTab(tab) {
 
 function initMap() {
     if (map) return;
-    map = L.map('map').setView([36.8065, 10.1815], 12);
+    map = L.map('map', { zoomControl: true }).setView([36.8065, 10.1815], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors'
     }).addTo(map);
     routeLayerGroup = L.layerGroup().addTo(map);
+
+    // Add legend control
+    legendControl = L.control({ position: 'bottomleft' });
+    legendControl.onAdd = function() {
+        const div = L.DomUtil.create('div', 'map-legend');
+        div.innerHTML = `
+            <strong>Legend</strong><br>
+            <span style="color:#3498db;">●</span> Route path<br>
+            <span style="color:#fff; border:2px solid #3498db; border-radius:50%; display:inline-block; width:10px; height:10px;"></span> Stop<br>
+            <span style="background:#f9a826; color:white; padding:2px 6px; border-radius:10px;">1</span> Bus
+        `;
+        return div;
+    };
+    legendControl.addTo(map);
+
+    // Add fullscreen button if available
+    if (L.control.fullscreen) {
+        L.control.fullscreen({ position: 'topright' }).addTo(map);
+    }
 }
 
 function haversineDistance(lat1, lon1, lat2, lon2) {
@@ -185,7 +205,7 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
 function isNearRoute(route, lat, lng) {
     return route.stops.some(stop => {
         const d = haversineDistance(lat, lng, stop.lat, stop.lng);
-        return d <= 0.5; // 500 meters
+        return d <= 0.5;
     });
 }
 
@@ -339,7 +359,7 @@ function resetDriverUI() {
     currentRoute = null;
 }
 
-// ==================== PASSENGER LOGIC WITH DUPLICATE MERGING ====================
+// ==================== PASSENGER LOGIC WITH DUPLICATE MERGING & IMPROVED MAP ====================
 function listenToActiveBuses() {
     const ref = firebase.database().ref('activeBuses');
     for (let id in markers) {
@@ -467,18 +487,42 @@ function showRoutePath(routeId) {
     routeLayerGroup.clearLayers();
     const route = routeData.find(r => r.id === routeId);
     if (!route || route.stops.length < 2) return;
-    const latlngs = route.stops.map(s => [s.lat, s.lng]);
-    const polyline = L.polyline(latlngs, { className: 'route-path' }).addTo(routeLayerGroup);
-    route.stops.forEach(stop => {
-        L.circleMarker([stop.lat, stop.lng], {
-            radius: 5,
-            color: '#3498db',
-            fillColor: '#fff',
+
+    // Draw white outline for the route (background)
+    const outlineLatLngs = route.stops.map(s => [s.lat, s.lng]);
+    L.polyline(outlineLatLngs, {
+        className: 'route-outline',
+        color: '#ffffff',
+        weight: 8,
+        opacity: 0.6,
+        lineJoin: 'round'
+    }).addTo(routeLayerGroup);
+
+    // Draw main route line
+    const polyline = L.polyline(outlineLatLngs, {
+        className: 'route-path',
+        color: '#3498db',
+        weight: 4,
+        opacity: 0.9,
+        lineJoin: 'round'
+    }).addTo(routeLayerGroup);
+
+    // Add numbered stop markers
+    route.stops.forEach((stop, index) => {
+        const isTerminus = (index === 0 || index === route.stops.length - 1);
+        const marker = L.circleMarker([stop.lat, stop.lng], {
+            radius: isTerminus ? 8 : 6,
+            color: '#2980b9',
+            fillColor: '#ffffff',
             fillOpacity: 1,
-            weight: 2
-        }).addTo(routeLayerGroup).bindPopup(stop.name);
+            weight: 3,
+            className: 'stop-marker'
+        }).addTo(routeLayerGroup);
+        marker.bindPopup(`<b>${stop.name}</b>`);
     });
-    map.fitBounds(polyline.getBounds(), { padding: [20, 20] });
+
+    // Fit map to route bounds
+    map.fitBounds(polyline.getBounds(), { padding: [40, 40] });
 }
 
 btnRefreshBuses.addEventListener('click', () => {
@@ -489,8 +533,11 @@ btnRefreshBuses.addEventListener('click', () => {
 passengerRouteSelect.addEventListener('change', () => {
     updateBusList();
     const filter = passengerRouteSelect.value;
-    if (filter) showRoutePath(filter);
-    else if (routeLayerGroup) routeLayerGroup.clearLayers();
+    if (filter) {
+        showRoutePath(filter);
+    } else {
+        if (routeLayerGroup) routeLayerGroup.clearLayers();
+    }
     refreshPassengerView();
 });
 
