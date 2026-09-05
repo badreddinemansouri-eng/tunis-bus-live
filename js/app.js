@@ -80,14 +80,12 @@ function parseOSMData(osmData) {
     const ways = {};
     const relations = {};
 
-    // Index all nodes, ways, and relations
     osmData.elements.forEach(el => {
         if (el.type === 'node') nodes[el.id] = el;
         else if (el.type === 'way') ways[el.id] = el;
         else if (el.type === 'relation') relations[el.id] = el;
     });
 
-    // Process each bus route relation
     Object.values(relations).forEach(rel => {
         if (rel.tags && rel.tags.route === 'bus') {
             const ref = rel.tags.ref || rel.id.toString();
@@ -95,19 +93,15 @@ function parseOSMData(osmData) {
             const stops = [];
             const path = [];
 
-            // Extract stop nodes
             if (rel.members) {
                 rel.members.forEach(member => {
                     if ((member.role === 'stop' || member.role === 'platform') && nodes[member.ref]) {
                         const node = nodes[member.ref];
-                        if (node.lat && node.lon) {
-                            stops.push({ name: node.tags?.name || 'Unknown', lat: node.lat, lng: node.lon });
-                        }
+                        if (node.lat && node.lon) stops.push({ name: node.tags?.name || 'Unknown', lat: node.lat, lng: node.lon });
                     }
                 });
             }
 
-            // Build path from ordered way members
             if (rel.members) {
                 const wayMembers = rel.members.filter(m => m.type === 'way');
                 wayMembers.forEach(member => {
@@ -115,26 +109,14 @@ function parseOSMData(osmData) {
                     if (way && way.nodes) {
                         way.nodes.forEach(nodeId => {
                             const node = nodes[nodeId];
-                            if (node && node.lat && node.lon) {
-                                path.push([node.lat, node.lon]);
-                            }
+                            if (node && node.lat && node.lon) path.push([node.lat, node.lon]);
                         });
                     }
                 });
             }
 
-            // If no path, fallback to connecting stops
-            if (path.length === 0 && stops.length > 1) {
-                stops.forEach(stop => path.push([stop.lat, stop.lng]));
-            }
-
             if (stops.length > 0) {
-                routes.push({
-                    id: ref,
-                    name: name,
-                    stops: stops,
-                    path: path
-                });
+                routes.push({ id: ref, name, stops, path: path.length > 0 ? path : null });
             }
         }
     });
@@ -147,12 +129,10 @@ function populateRouteSelects() {
     passengerRouteSelect.innerHTML = '<option value="">-- All Buses --</option>';
     routeData.forEach(route => {
         const optionText = `${route.id} - ${route.name}`;
-
         const opt1 = document.createElement('option');
         opt1.value = route.id;
         opt1.textContent = optionText;
         routeSelect.appendChild(opt1);
-
         const opt2 = document.createElement('option');
         opt2.value = route.id;
         opt2.textContent = optionText;
@@ -194,20 +174,19 @@ function switchTab(tab) {
 
 function initMap() {
     if (map) return;
-    // Use a clean, modern basemap (CartoDB Positron)
+    // Standard OSM tiles (Google Maps‑like, no API key)
     map = L.map('map', { zoomControl: true }).setView([36.8065, 10.1815], 12);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '© OpenStreetMap contributors © CARTO',
-        subdomains: 'abcd',
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
         maxZoom: 19
     }).addTo(map);
 
     routeLayerGroup = L.layerGroup().addTo(map);
 
-    // Add scale bar
+    // Scale bar
     L.control.scale({ metric: true, imperial: false }).addTo(map);
 
-    // Add legend
+    // Legend
     legendControl = L.control({ position: 'bottomleft' });
     legendControl.onAdd = function() {
         const div = L.DomUtil.create('div', 'map-legend');
@@ -388,7 +367,7 @@ function resetDriverUI() {
     currentRoute = null;
 }
 
-// ==================== PASSENGER LOGIC WITH DUPLICATE MERGING & IMPROVED MAP ====================
+// ==================== PASSENGER LOGIC WITH DUPLICATE MERGING & OSRM ROUTING ====================
 function listenToActiveBuses() {
     const ref = firebase.database().ref('activeBuses');
     for (let id in markers) {
@@ -511,17 +490,37 @@ function updateBusList() {
     document.getElementById('noBuses').style.display = hasBuses ? 'none' : 'block';
 }
 
-function showRoutePath(routeId) {
+async function showRoutePath(routeId) {
     if (!routeLayerGroup) return;
     routeLayerGroup.clearLayers();
     const route = routeData.find(r => r.id === routeId);
-    if (!route) return;
+    if (!route || route.stops.length < 2) return;
 
-    // Use route.path if available (accurate OSM geometry), otherwise fallback to stops
-    const pathCoords = route.path && route.path.length > 1 ? route.path : route.stops.map(s => [s.lat, s.lng]);
-    if (pathCoords.length < 2) return;
+    // Use pre‑fetched OSM path if available, otherwise fetch from OSRM
+    let pathCoords = route.path && route.path.length > 1 ? route.path : null;
 
-    // Draw white outline for the route (background)
+    if (!pathCoords) {
+        // Build coordinates string for OSRM: lng,lat separated by semicolons
+        const coords = route.stops.map(s => `${s.lng},${s.lat}`).join(';');
+        const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+        try {
+            const response = await fetch(osrmUrl);
+            const data = await response.json();
+            if (data.code === 'Ok' && data.routes && data.routes[0]) {
+                const geometry = data.routes[0].geometry;
+                pathCoords = geometry.coordinates.map(coord => [coord[1], coord[0]]);
+            }
+        } catch (e) {
+            console.warn('OSRM routing failed, fallback to straight lines.', e);
+        }
+    }
+
+    // Fallback to straight lines if still no path
+    if (!pathCoords || pathCoords.length < 2) {
+        pathCoords = route.stops.map(s => [s.lat, s.lng]);
+    }
+
+    // Draw white outline
     L.polyline(pathCoords, {
         className: 'route-outline',
         color: '#ffffff',
@@ -539,7 +538,7 @@ function showRoutePath(routeId) {
         lineJoin: 'round'
     }).addTo(routeLayerGroup);
 
-    // Add numbered stop markers
+    // Add stop markers
     route.stops.forEach((stop, index) => {
         const isTerminus = (index === 0 || index === route.stops.length - 1);
         const marker = L.circleMarker([stop.lat, stop.lng], {
