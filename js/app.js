@@ -11,7 +11,7 @@ let routeLayerGroup = null;
 let legendControl = null;
 let searchResults = [];
 
-// DOM refs
+// DOM refs – with null checks
 const driverView = document.getElementById('driverView');
 const passengerView = document.getElementById('passengerView');
 const tabDriver = document.getElementById('tabDriver');
@@ -41,18 +41,16 @@ function init() {
     loadRoutes();
     checkFirebaseConnection();
     setupSearch();
-    setupDriverSearch();
-    btnClearSearch.addEventListener('click', clearSearch);
-    btnCloseDetail.addEventListener('click', () => routeDetailPanel.classList.add('hidden'));
+    setupDriverSearch(); // safe – has null check
+    if (btnClearSearch) btnClearSearch.addEventListener('click', clearSearch);
+    if (btnCloseDetail) btnCloseDetail.addEventListener('click', () => routeDetailPanel.classList.add('hidden'));
 }
 
 function loadRoutes() {
-    // First try to get from global routesData (from routes.js)
     if (typeof routesData !== 'undefined' && Array.isArray(routesData) && routesData.length > 0) {
         routeData = routesData;
         console.log('✅ Loaded local routes:', routeData.length);
     } else {
-        // Try localStorage
         const stored = localStorage.getItem('tunis_bus_routes');
         if (stored) {
             try {
@@ -61,19 +59,13 @@ function loadRoutes() {
             } catch(e) {}
         }
     }
-
-    // If still empty, fallback to empty array
     if (!routeData || routeData.length === 0) {
         routeData = [];
         console.warn('⚠️ No routes found – try fetching from OSM');
         fetchRoutesFromOSM(false);
     }
-
     populateRouteSelects();
-    // If we have routes, also try to fetch more from OSM as supplement
-    if (routeData.length > 0) {
-        fetchRoutesFromOSM(true);
-    }
+    if (routeData.length > 0) fetchRoutesFromOSM(true);
 }
 
 async function fetchRoutesFromOSM(supplement = false) {
@@ -173,7 +165,6 @@ function checkFirebaseConnection() {
     statusEl.textContent = 'Checking...';
     statusEl.className = 'connection-badge';
 
-    // Primary: Use a simple read to confirm database access
     firebase.database().ref('/').once('value')
         .then(() => {
             statusEl.textContent = 'Online ✅';
@@ -186,7 +177,6 @@ function checkFirebaseConnection() {
             console.error('❌ Database read failed:', err);
         });
 
-    // Secondary: Listen to .info/connected for real-time changes (WebSocket)
     try {
         firebase.database().ref('.info/connected').on('value', (snap) => {
             if (snap.val() === true) {
@@ -194,26 +184,24 @@ function checkFirebaseConnection() {
                 statusEl.className = 'connection-badge online';
             }
         });
-    } catch (e) {
-        // WebSocket might not be supported – ignore
-    }
+    } catch (e) {}
 }
 
 // ==================== TAB SWITCHING ====================
-tabDriver.addEventListener('click', () => switchTab('driver'));
-tabPassenger.addEventListener('click', () => switchTab('passenger'));
+if (tabDriver) tabDriver.addEventListener('click', () => switchTab('driver'));
+if (tabPassenger) tabPassenger.addEventListener('click', () => switchTab('passenger'));
 
 function switchTab(tab) {
     if (tab === 'driver') {
-        driverView.classList.add('active');
-        passengerView.classList.remove('active');
-        tabDriver.classList.add('active');
-        tabPassenger.classList.remove('active');
+        if (driverView) driverView.classList.add('active');
+        if (passengerView) passengerView.classList.remove('active');
+        if (tabDriver) tabDriver.classList.add('active');
+        if (tabPassenger) tabPassenger.classList.remove('active');
     } else {
-        passengerView.classList.add('active');
-        driverView.classList.remove('active');
-        tabPassenger.classList.add('active');
-        tabDriver.classList.remove('active');
+        if (passengerView) passengerView.classList.add('active');
+        if (driverView) driverView.classList.remove('active');
+        if (tabPassenger) tabPassenger.classList.add('active');
+        if (tabDriver) tabDriver.classList.remove('active');
         initMap();
         listenToActiveBuses();
     }
@@ -238,44 +226,35 @@ function initMap() {
     legendControl.addTo(map);
 }
 
-// ==================== DRIVER SEARCH (filter dropdown) ====================
+// ==================== DRIVER SEARCH ====================
 function setupDriverSearch() {
     if (!driverSearchInput) return;
     driverSearchInput.addEventListener('input', function() {
         const query = this.value.trim().toLowerCase();
         const options = routeSelect.options;
-        let hasVisible = false;
         for (let i = 0; i < options.length; i++) {
             const text = options[i].text.toLowerCase();
-            if (text.includes(query) || query === '') {
-                options[i].style.display = '';
-                hasVisible = true;
-            } else {
-                options[i].style.display = 'none';
-            }
-        }
-        // If no results, show a temporary message
-        if (!hasVisible && query.length > 0) {
-            // Add a placeholder if needed
+            options[i].style.display = text.includes(query) || query === '' ? '' : 'none';
         }
     });
 }
 
 // ==================== PASSENGER SEARCH ====================
 function setupSearch() {
+    if (!searchInput) return;
     searchInput.addEventListener('input', handleSearch);
-    chkRoutes.addEventListener('change', handleSearch);
-    chkStops.addEventListener('change', handleSearch);
+    if (chkRoutes) chkRoutes.addEventListener('change', handleSearch);
+    if (chkStops) chkStops.addEventListener('change', handleSearch);
 }
 
 function handleSearch() {
     const query = searchInput.value.trim().toLowerCase();
     if (query.length < 1) {
-        searchResultsContainer.classList.add('hidden');
+        if (searchResultsContainer) searchResultsContainer.classList.add('hidden');
         return;
     }
-    const searchRoutes = chkRoutes.checked;
-    const searchStops = chkStops.checked;
+    const searchRoutes = chkRoutes ? chkRoutes.checked : true;
+    const searchStops = chkStops ? chkStops.checked : true;
     const results = [];
 
     if (searchRoutes) {
@@ -308,6 +287,7 @@ function handleSearch() {
         return 0;
     });
 
+    if (!searchResultsContainer) return;
     if (results.length === 0) {
         searchResultsContainer.innerHTML = '<div class="search-result-item" style="color:var(--text-light);">No results found</div>';
         searchResultsContainer.classList.remove('hidden');
@@ -331,75 +311,101 @@ function handleSearch() {
     searchResultsContainer.innerHTML = html;
     searchResultsContainer.classList.remove('hidden');
 
+    // ===== FIXED CLICK HANDLER =====
     searchResultsContainer.querySelectorAll('.search-result-item').forEach(el => {
         el.addEventListener('click', function() {
             const type = this.dataset.type;
-            if (type === 'route') {
-                const routeId = this.dataset.routeid;
+            const routeId = this.dataset.routeid;
+            console.log('🖱️ Clicked result:', type, routeId);
+            if (type === 'route' && routeId) {
                 showRoute(routeId);
-                searchInput.value = '';
-                searchResultsContainer.classList.add('hidden');
+                if (searchInput) searchInput.value = '';
+                if (searchResultsContainer) searchResultsContainer.classList.add('hidden');
             } else if (type === 'stop') {
                 const lat = parseFloat(this.dataset.stoplat);
                 const lng = parseFloat(this.dataset.stoplng);
                 const name = this.dataset.stopname;
                 focusStop(lat, lng, name);
-                searchInput.value = '';
-                searchResultsContainer.classList.add('hidden');
+                if (searchInput) searchInput.value = '';
+                if (searchResultsContainer) searchResultsContainer.classList.add('hidden');
             }
         });
     });
 }
 
 function clearSearch() {
-    searchInput.value = '';
-    searchResultsContainer.classList.add('hidden');
-    routeDetailPanel.classList.add('hidden');
+    if (searchInput) searchInput.value = '';
+    if (searchResultsContainer) searchResultsContainer.classList.add('hidden');
+    if (routeDetailPanel) routeDetailPanel.classList.add('hidden');
 }
 
+// ==================== SHOW ROUTE & STOP (FIXED) ====================
 function showRoute(routeId) {
     const route = routeData.find(r => r.id === routeId);
-    if (!route) return;
-    if (routeLayerGroup) routeLayerGroup.clearLayers();
-    let pathCoords = route.path && route.path.length > 1 ? route.path : null;
-    if (!pathCoords) {
-        pathCoords = route.stops.map(s => [s.lat, s.lng]);
+    if (!route) { console.warn('Route not found:', routeId); return; }
+
+    // Ensure map and layer group exist
+    if (!map) {
+        console.warn('Map not ready – switching to Passenger tab...');
+        switchTab('passenger');
+        setTimeout(() => { showRoute(routeId); }, 500);
+        return;
     }
-    if (pathCoords && pathCoords.length > 1) {
-        L.polyline(pathCoords, { className: 'route-outline', color: '#fff', weight: 8, opacity: 0.7 }).addTo(routeLayerGroup);
-        L.polyline(pathCoords, { className: 'route-path', color: '#3498db', weight: 4, opacity: 0.9 }).addTo(routeLayerGroup);
+    if (!routeLayerGroup) {
+        routeLayerGroup = L.layerGroup().addTo(map);
     }
+
+    // Clear old layers
+    routeLayerGroup.clearLayers();
+
+    // Build polyline
+    let coords = route.path && route.path.length > 1 ? route.path : route.stops.map(s => [s.lat, s.lng]);
+    if (coords.length > 1) {
+        L.polyline(coords, { className: 'route-outline', color: '#fff', weight: 8, opacity: 0.7 }).addTo(routeLayerGroup);
+        L.polyline(coords, { className: 'route-path', color: '#3498db', weight: 4, opacity: 0.9 }).addTo(routeLayerGroup);
+        console.log('✅ Polyline drawn with', coords.length, 'points');
+    }
+
+    // Add stop markers
     route.stops.forEach((stop, i) => {
         const marker = L.circleMarker([stop.lat, stop.lng], {
-            radius: (i===0||i===route.stops.length-1)?8:6,
-            color:'#2980b9',
-            fillColor:'#fff',
-            fillOpacity:1,
-            weight:3
+            radius: (i === 0 || i === route.stops.length - 1) ? 8 : 6,
+            color: '#2980b9',
+            fillColor: '#fff',
+            fillOpacity: 1,
+            weight: 3
         }).addTo(routeLayerGroup);
         marker.bindPopup(`<b>${stop.name}</b>`);
     });
-    if (pathCoords.length > 0) {
-        const bounds = L.latLngBounds(pathCoords);
+    console.log('✅ Added', route.stops.length, 'stop markers');
+
+    // Fit map to route
+    if (coords.length > 0) {
+        const bounds = L.latLngBounds(coords);
         map.fitBounds(bounds, { padding: [40, 40] });
+        console.log('✅ Map zoomed to route');
     }
 
-    routeDetailContent.innerHTML = `
-        <h4>${route.id} - ${route.name}</h4>
-        <p><strong>Stops:</strong> ${route.stops.length}</p>
-        <div class="stop-list">
-            ${route.stops.map(s => `<div class="stop-item"><i class="fas fa-circle" style="font-size:8px; color:#3498db;"></i> ${s.name}</div>`).join('')}
-        </div>
-    `;
-    routeDetailPanel.classList.remove('hidden');
+    // Update detail panel
+    if (routeDetailContent) {
+        routeDetailContent.innerHTML = `
+            <h4>${route.id} - ${route.name}</h4>
+            <p><strong>Stops:</strong> ${route.stops.length}</p>
+            <div class="stop-list">
+                ${route.stops.map(s => `<div class="stop-item"><i class="fas fa-circle" style="font-size:8px; color:#3498db;"></i> ${s.name}</div>`).join('')}
+            </div>
+        `;
+    }
+    if (routeDetailPanel) routeDetailPanel.classList.remove('hidden');
 }
 
 function focusStop(lat, lng, name) {
+    if (!map) { switchTab('passenger'); setTimeout(() => focusStop(lat,lng,name), 500); return; }
     map.setView([lat, lng], 16);
     const marker = L.marker([lat, lng]).addTo(map);
     marker.bindPopup(`<b>${name}</b>`).openPopup();
     const routesWithStop = routeData.filter(r => r.stops.some(s => s.lat === lat && s.lng === lng));
-    if (routesWithStop.length > 0) {
+    if (routeDetailContent) {
         routeDetailContent.innerHTML = `
             <h4>Stop: ${name}</h4>
             <p><strong>Served by routes:</strong></p>
@@ -407,49 +413,48 @@ function focusStop(lat, lng, name) {
                 ${routesWithStop.map(r => `<li>${r.id} - ${r.name}</li>`).join('')}
             </ul>
         `;
-        routeDetailPanel.classList.remove('hidden');
     }
+    if (routeDetailPanel) routeDetailPanel.classList.remove('hidden');
 }
 
 // ==================== DRIVER FUNCTIONS ====================
-btnStartTrip.addEventListener('click', startTrip);
-btnStopTrip.addEventListener('click', stopTrip);
+if (btnStartTrip) btnStartTrip.addEventListener('click', startTrip);
+if (btnStopTrip) btnStopTrip.addEventListener('click', stopTrip);
 
 function startTrip() {
-    const selectedRouteId = routeSelect.value;
+    const selectedRouteId = routeSelect ? routeSelect.value : '';
     if (selectedRouteId) {
         const route = routeData.find(r => r.id === selectedRouteId);
         if (!route) { alert('Selected route not found.'); return; }
         if (!navigator.geolocation) { alert('Geolocation is not supported.'); return; }
-        routeSelect.disabled = true;
-        directionSelect.disabled = true;
-        driverStatus.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking your location...';
+        if (routeSelect) routeSelect.disabled = true;
+        if (directionSelect) directionSelect.disabled = true;
+        if (driverStatus) driverStatus.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking your location...';
         navigator.geolocation.getCurrentPosition(position => {
             const { latitude, longitude } = position.coords;
             if (isNearRoute(route, latitude, longitude)) {
-                const direction = directionSelect.value;
+                const direction = directionSelect ? directionSelect.value : 'forward';
                 currentRoute = route;
                 currentDirection = direction;
                 beginTrip(route, direction);
             } else {
-                driverStatus.textContent = 'You are not near this route. Cannot start trip.';
-                routeSelect.disabled = false;
-                directionSelect.disabled = false;
+                if (driverStatus) driverStatus.textContent = 'You are not near this route. Cannot start trip.';
+                if (routeSelect) routeSelect.disabled = false;
+                if (directionSelect) directionSelect.disabled = false;
                 alert('You must be near the route to start sharing.');
             }
         }, error => {
-            driverStatus.textContent = 'Error getting location: ' + error.message;
-            routeSelect.disabled = false;
-            directionSelect.disabled = false;
+            if (driverStatus) driverStatus.textContent = 'Error getting location: ' + error.message;
+            if (routeSelect) routeSelect.disabled = false;
+            if (directionSelect) directionSelect.disabled = false;
             alert('Failed to get your location.');
         }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
         return;
     }
 
-    // Auto-detect
-    routeSelect.disabled = true;
-    directionSelect.disabled = true;
-    driverStatus.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Detecting your route...';
+    if (routeSelect) routeSelect.disabled = true;
+    if (directionSelect) directionSelect.disabled = true;
+    if (driverStatus) driverStatus.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Detecting your route...';
     if (!navigator.geolocation) { alert('Geolocation not supported'); resetDriverUI(); return; }
     navigator.geolocation.getCurrentPosition(position => {
         const { latitude, longitude } = position.coords;
@@ -459,20 +464,20 @@ function startTrip() {
             currentDirection = detection.direction;
             beginTrip(currentRoute, currentDirection);
         } else {
-            driverStatus.textContent = 'No route detected nearby. Please select a route manually.';
-            routeSelect.disabled = false;
-            directionSelect.disabled = false;
+            if (driverStatus) driverStatus.textContent = 'No route detected nearby. Please select a route manually.';
+            if (routeSelect) routeSelect.disabled = false;
+            if (directionSelect) directionSelect.disabled = false;
             alert('Could not automatically detect route.');
         }
     }, error => {
-        driverStatus.textContent = 'Error getting location: ' + error.message;
+        if (driverStatus) driverStatus.textContent = 'Error getting location: ' + error.message;
         resetDriverUI();
         alert('Failed to get location.');
     }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
 }
 
 function beginTrip(route, direction) {
-    const driverName = driverNameInput.value.trim() || 'Unknown';
+    const driverName = driverNameInput ? driverNameInput.value.trim() : 'Unknown';
     if (!route) { alert('No route selected.'); return; }
     currentTripId = `${route.id}_${Date.now()}`;
     firebase.database().ref(`activeBuses/${currentTripId}`).set({
@@ -493,16 +498,16 @@ function beginTrip(route, direction) {
             speed: speed||0,
             lastUpdate: firebase.database.ServerValue.TIMESTAMP
         }).catch(err => console.error(err));
-        driverStatus.innerHTML = `<i class="fas fa-broadcast-tower"></i> Sharing location (accuracy: ${Math.round(accuracy)}m)`;
+        if (driverStatus) driverStatus.innerHTML = `<i class="fas fa-broadcast-tower"></i> Sharing location (accuracy: ${Math.round(accuracy)}m)`;
     }, error => {
-        driverStatus.textContent = 'Error getting location: ' + error.message;
+        if (driverStatus) driverStatus.textContent = 'Error getting location: ' + error.message;
     }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
 
-    btnStartTrip.classList.add('hidden');
-    btnStopTrip.classList.remove('hidden');
-    routeSelect.disabled = true;
-    directionSelect.disabled = true;
-    driverStatus.innerHTML = `<i class="fas fa-check-circle"></i> Trip started on ${route.id} (${route.name}) – ${direction}`;
+    if (btnStartTrip) btnStartTrip.classList.add('hidden');
+    if (btnStopTrip) btnStopTrip.classList.remove('hidden');
+    if (routeSelect) routeSelect.disabled = true;
+    if (directionSelect) directionSelect.disabled = true;
+    if (driverStatus) driverStatus.innerHTML = `<i class="fas fa-check-circle"></i> Trip started on ${route.id} (${route.name}) – ${direction}`;
 }
 
 function stopTrip() {
@@ -512,14 +517,14 @@ function stopTrip() {
         currentTripId = null;
     }
     resetDriverUI();
-    driverStatus.innerHTML = '<i class="fas fa-flag-checkered"></i> Trip ended.';
+    if (driverStatus) driverStatus.innerHTML = '<i class="fas fa-flag-checkered"></i> Trip ended.';
 }
 
 function resetDriverUI() {
-    btnStartTrip.classList.remove('hidden');
-    btnStopTrip.classList.add('hidden');
-    routeSelect.disabled = false;
-    directionSelect.disabled = false;
+    if (btnStartTrip) btnStartTrip.classList.remove('hidden');
+    if (btnStopTrip) btnStopTrip.classList.add('hidden');
+    if (routeSelect) routeSelect.disabled = false;
+    if (directionSelect) directionSelect.disabled = false;
     currentRoute = null;
 }
 
@@ -557,8 +562,9 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
 
 // ==================== PASSENGER FUNCTIONS ====================
 function listenToActiveBuses() {
+    if (!map) return;
     const ref = firebase.database().ref('activeBuses');
-    for (let id in markers) { if (map) map.removeLayer(markers[id]); delete markers[id]; }
+    for (let id in markers) { map.removeLayer(markers[id]); delete markers[id]; }
     activeBuses = {};
     if (routeLayerGroup) routeLayerGroup.clearLayers();
     updateBusList();
@@ -612,6 +618,7 @@ function getUniqueBuses() {
 }
 
 function updateBusList() {
+    if (!busListElement) return;
     busListElement.innerHTML = '';
     const uniqueBuses = getUniqueBuses();
     let hasBuses = false;
@@ -623,13 +630,16 @@ function updateBusList() {
         li.appendChild(num); li.appendChild(time);
         busListElement.appendChild(li);
     });
-    document.getElementById('noBuses').style.display = hasBuses ? 'none' : 'block';
+    const noBuses = document.getElementById('noBuses');
+    if (noBuses) noBuses.style.display = hasBuses ? 'none' : 'block';
 }
 
-btnRefreshBuses.addEventListener('click', () => {
-    firebase.database().ref('activeBuses').off();
-    listenToActiveBuses();
-});
+if (btnRefreshBuses) {
+    btnRefreshBuses.addEventListener('click', () => {
+        firebase.database().ref('activeBuses').off();
+        listenToActiveBuses();
+    });
+}
 
 // ==================== START APP ====================
 document.addEventListener('DOMContentLoaded', init);
