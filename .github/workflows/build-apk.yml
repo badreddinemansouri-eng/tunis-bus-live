@@ -23,7 +23,7 @@ jobs:
       - name: Prepare www folder
         run: |
           mkdir -p www
-          cp -r index.html manifest.json sw.js css js icons capacitor.config.json package.json www/ 2>/dev/null || true
+          cp -r index.html manifest.json sw.js css js icons privacy.html terms.html capacitor.config.json package.json www/ 2>/dev/null || true
 
       - name: Add Android platform
         run: npx cap add android
