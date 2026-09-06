@@ -12,14 +12,17 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="css/style.css?v=8">
+  <link rel="stylesheet" href="css/style.css?v=9">
   <script src="https://unpkg.com/@capacitor/core@latest/dist/capacitor.js"></script>
 </head>
 <body>
   <div id="app">
     <header>
       <div class="header-top">
-        <h1><i class="fas fa-bus"></i> <span id="appTitle">Tunis Bus Live</span></h1>
+        <h1>
+          <img src="icons/icon-192.png" alt="Logo" style="height:32px;width:32px;border-radius:8px;vertical-align:middle;margin-right:8px;">
+          <span id="appTitle">Tunis Bus Live</span>
+        </h1>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <button id="adminToggle" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;color:white;font-size:0.7rem;cursor:pointer;">🔒 Admin</button>
           <select id="langSwitcher" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;font-size:0.8rem;">
@@ -129,9 +132,23 @@
       </div>
     </div>
 
+    <!-- LOGIN MODAL -->
+    <div id="loginModal" class="modal hidden">
+      <div class="modal-content">
+        <h3>🔒 Admin Login</h3>
+        <p style="color:#666;font-size:0.9rem;">Enter your credentials to access the dashboard.</p>
+        <input type="email" id="loginEmail" placeholder="Email" style="width:100%;padding:10px;margin:8px 0;border:2px solid #ddd;border-radius:8px;">
+        <input type="password" id="loginPassword" placeholder="Password" style="width:100%;padding:10px;margin:8px 0;border:2px solid #ddd;border-radius:8px;">
+        <button id="loginBtn" class="btn btn-primary" style="width:auto;padding:8px 16px;">Login</button>
+        <button id="loginCancel" class="btn btn-secondary" style="width:auto;padding:8px 16px;">Cancel</button>
+        <div id="loginError" style="color:red;font-size:0.85rem;margin-top:8px;"></div>
+      </div>
+    </div>
+
     <!-- ADMIN PANEL -->
     <div id="adminPanel" class="admin-panel hidden">
       <h3>📊 TTS Dashboard</h3>
+      <button id="logoutAdmin" class="btn btn-danger" style="width:auto;padding:8px 16px;margin-bottom:12px;">Logout</button>
       <div id="adminStats" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0;">
         <div class="stat-card"><span id="statBuses">0</span> Active Buses</div>
         <div class="stat-card"><span id="statDrivers">0</span> Active Drivers</div>
@@ -159,9 +176,10 @@
   <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
-  <script src="js/firebase-config.js?v=8"></script>
-  <script src="js/routes.js?v=8"></script>
-  <script type="module" src="js/app.js?v=8"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="js/firebase-config.js?v=9"></script>
+  <script src="js/routes.js?v=9"></script>
+  <script type="module" src="js/app.js?v=9"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
