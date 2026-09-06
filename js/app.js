@@ -1,5 +1,5 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – ULTIMATE EDITION
+// 🚌 TUNIS BUS LIVE – ULTIMATE EDITION (FIXED IMPORTS)
 // Works as PWA (web) AND native Android (Capacitor)
 // ============================================================
 
@@ -277,6 +277,7 @@ async function startTripConfirmed(routeId, direction) {
   if (isNative) {
     // ----------------- NATIVE ANDROID (Background) ----------------
     try {
+      // Dynamic import of background geolocation plugin
       const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
       // Start background watcher
       bgWatcherId = await BackgroundGeolocation.addWatcher({
@@ -366,8 +367,10 @@ function stopTrip() {
   // Stop native background watcher
   if (isNative && bgWatcherId) {
     try {
-      const { BackgroundGeolocation } = require('@capacitor-community/background-geolocation');
-      BackgroundGeolocation.removeWatcher({ id: bgWatcherId });
+      // Use dynamic import again for consistency
+      import('@capacitor-community/background-geolocation').then(module => {
+        module.BackgroundGeolocation.removeWatcher({ id: bgWatcherId });
+      }).catch(() => {});
     } catch(e) {}
     bgWatcherId = null;
   }
