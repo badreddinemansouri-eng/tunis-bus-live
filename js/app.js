@@ -1,6 +1,6 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – SMART EDITION
-// Complete app.js – handles all edge cases, grouping, auto‑end
+// 🚌 TUNIS BUS LIVE – ULTIMATE EDITION
+// Works as PWA (web) AND native Android (Capacitor)
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap } from './map.js';
@@ -8,10 +8,17 @@ import { openDB, saveRoutes, getRoutes, saveTrip, getTrips, toggleFavorite, getF
 import { buildSearchIndex, search, getRoute } from './search.js';
 import { initPWA, isOnline, onOnline, onOffline } from './pwa.js';
 
+// ============ CONSTANTS ============
+const STALE_THRESHOLD = 3 * 60 * 1000; // 3 min – switch to "estimated"
+const REMOVE_THRESHOLD = 10 * 60 * 1000; // 10 min – remove completely
+const AUTO_END_TIMEOUT = 5 * 60; // 5 min stationary
+const CLEANUP_INTERVAL = 30000; // 30s
+
 // ============ STATE ============
 let currentView = 'passenger';
 let currentTripId = null;
 let watchId = null;
+let bgWatcherId = null; // for Capacitor background watcher
 let routeData = [];
 let activeBuses = {};
 let favorites = [];
@@ -25,6 +32,10 @@ let lastMovementTime = Date.now();
 let driverSpeed = 0;
 let driverLocation = null;
 let isTripActive = false;
+let cleanupTimer = null;
+
+// Determine if we're in a native Capacitor environment
+const isNative = window.Capacitor && Capacitor.isNative;
 
 // ============ DOM REFS ============
 const $ = (id) => document.getElementById(id);
@@ -57,7 +68,7 @@ const busCount = $('busCount');
 
 // ============ INIT ============
 async function init() {
-  console.log('🚌 Tunis Bus Live v4.0 – Smart Edition');
+  console.log(`🚌 Tunis Bus Live v5.0 – ${isNative ? 'Native' : 'PWA'} mode`);
   initPWA();
   await loadRoutes();
   setupTabs();
@@ -69,6 +80,11 @@ async function init() {
   setupConnection();
   map = initMap('map');
   listenToActiveBuses();
+
+  // Periodic stale cleanup
+  if (cleanupTimer) clearInterval(cleanupTimer);
+  cleanupTimer = setInterval(cleanupStaleBuses, CLEANUP_INTERVAL);
+
   onOnline(() => {
     connectionStatus.textContent = 'Online ✅';
     connectionStatus.className = 'connection-badge online';
@@ -79,8 +95,10 @@ async function init() {
     connectionStatus.className = 'connection-badge offline';
     showToast('You are offline. Live updates paused.', 'warning');
   });
+
   favorites = await getFavorites();
   updateFavoriteButton();
+
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       pos => autoDetectRoute(pos.coords.latitude, pos.coords.longitude),
@@ -217,7 +235,7 @@ async function startTripConfirmed(routeId, direction) {
   const route = routeData.find(r => r.id === routeId);
   if (!route) { alert('Route not found'); return; }
 
-  // Check if near route
+  // Check proximity
   if (navigator.geolocation) {
     try {
       const pos = await getCurrentPosition();
@@ -253,7 +271,74 @@ async function startTripConfirmed(routeId, direction) {
 
   isTripActive = true;
 
-  // Start location tracking
+  // ============================================================
+  //  GEOLOCATION – NATIVE (Capacitor) vs WEB (navigator)
+  // ============================================================
+  if (isNative) {
+    // ----------------- NATIVE ANDROID (Background) ----------------
+    try {
+      const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
+      // Start background watcher
+      bgWatcherId = await BackgroundGeolocation.addWatcher({
+        backgroundMessage: 'Tunis Bus Live is tracking your bus',
+        backgroundTitle: 'Bus Tracking Active',
+        requestPermissions: true,
+        stale: false,
+        distanceFilter: 10, // meters
+        interval: 5000, // 5 seconds
+        notificationTitle: 'Tunis Bus Live',
+        notificationText: 'Tracking your bus location',
+        notificationIconColor: '#f5a623',
+        notificationIconLarge: 'ic_stat_bus'
+      }, (location, error) => {
+        if (error) {
+          console.error('BG location error:', error);
+          return;
+        }
+        // Update Firebase with native location
+        driverLocation = location;
+        driverSpeed = location.speed || 0;
+        lastMovementTime = Date.now();
+        firebase.database().ref(`activeBuses/${currentTripId}`).update({
+          lat: location.latitude,
+          lng: location.longitude,
+          accuracy: location.accuracy,
+          speed: driverSpeed,
+          heading: location.heading || 0,
+          lastUpdate: firebase.database.ServerValue.TIMESTAMP
+        });
+        driverStatus.innerHTML = `<i class="fas fa-broadcast-tower"></i> BG Sharing (acc: ${Math.round(location.accuracy)}m)`;
+      });
+      driverStatus.innerHTML = '✅ Native background tracking active';
+    } catch (e) {
+      console.error('Failed to start background geolocation:', e);
+      // Fallback to web geolocation
+      startWebGeolocation();
+    }
+  } else {
+    // ----------------- WEB (navigator.geolocation) ----------------
+    startWebGeolocation();
+  }
+
+  // Save trip locally
+  await saveTrip({ id: currentTripId, routeId, direction, driver, startedAt: Date.now(), endedAt: null });
+
+  btnStartTrip.classList.add('hidden');
+  btnStopTrip.classList.remove('hidden');
+  routeSelect.disabled = true;
+  directionSelect.disabled = true;
+  driverStatus.innerHTML = `<i class="fas fa-check-circle" style="color:#27ae60;"></i> Trip started on ${routeId} (${direction})`;
+  showToast(`🚌 Trip started on ${routeId}`, 'success');
+
+  // Auto‑end monitor
+  if (autoEndTimer) clearInterval(autoEndTimer);
+  autoEndTimer = setInterval(checkAutoEnd, 30000);
+
+  setTimeout(() => switchView('passenger'), 500);
+}
+
+// ============ WEB GEOLOCATION ============
+function startWebGeolocation() {
   watchId = navigator.geolocation.watchPosition(
     pos => {
       driverLocation = pos.coords;
@@ -274,46 +359,37 @@ async function startTripConfirmed(routeId, direction) {
     },
     { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
   );
-
-  // Save trip locally
-  await saveTrip({
-    id: currentTripId,
-    routeId,
-    direction,
-    driver,
-    startedAt: Date.now(),
-    endedAt: null
-  });
-
-  btnStartTrip.classList.add('hidden');
-  btnStopTrip.classList.remove('hidden');
-  routeSelect.disabled = true;
-  directionSelect.disabled = true;
-  driverStatus.innerHTML = `<i class="fas fa-check-circle" style="color:#27ae60;"></i> Trip started on ${routeId} (${direction})`;
-  showToast(`🚌 Trip started on ${routeId}`, 'success');
-
-  // Start auto‑end monitor
-  if (autoEndTimer) clearInterval(autoEndTimer);
-  autoEndTimer = setInterval(checkAutoEnd, 30000); // check every 30s
-
-  setTimeout(() => switchView('passenger'), 500);
 }
 
+// ============ STOP TRIP ============
 function stopTrip() {
+  // Stop native background watcher
+  if (isNative && bgWatcherId) {
+    try {
+      const { BackgroundGeolocation } = require('@capacitor-community/background-geolocation');
+      BackgroundGeolocation.removeWatcher({ id: bgWatcherId });
+    } catch(e) {}
+    bgWatcherId = null;
+  }
+
+  // Stop web watch
   if (watchId) {
     navigator.geolocation.clearWatch(watchId);
     watchId = null;
   }
+
   if (currentTripId) {
     firebase.database().ref(`activeBuses/${currentTripId}`).remove();
     saveTrip({ id: currentTripId, endedAt: Date.now() });
     currentTripId = null;
   }
+
   isTripActive = false;
   if (autoEndTimer) {
     clearInterval(autoEndTimer);
     autoEndTimer = null;
   }
+
   btnStartTrip.classList.remove('hidden');
   btnStopTrip.classList.add('hidden');
   routeSelect.disabled = false;
@@ -322,22 +398,17 @@ function stopTrip() {
   showToast('🚏 Trip ended', 'info');
 }
 
-// ============ AUTO‑END LOGIC ============
+// ============ AUTO‑END ============
 function checkAutoEnd() {
   if (!currentTripId || !isTripActive) return;
   if (!driverLocation) return;
-
   const now = Date.now();
-  const timeSinceMove = (now - lastMovementTime) / 1000; // seconds
-
-  // If stationary for > 5 minutes, prompt user
-  if (driverSpeed < 0.5 && timeSinceMove > 300) {
-    if (!confirm('⚠️ You haven\'t moved for 5 minutes. Did you end your trip? Click OK to end, Cancel to continue.')) {
-      // User cancelled – reset timer
+  const timeSinceMove = (now - lastMovementTime) / 1000;
+  if (driverSpeed < 0.5 && timeSinceMove > AUTO_END_TIMEOUT) {
+    if (!confirm('⚠️ You haven\'t moved for 5 minutes. Did you end your trip?')) {
       lastMovementTime = now;
       return;
     }
-    // Auto‑end
     showToast('🛑 Trip auto‑ended due to inactivity', 'warning');
     stopTrip();
   }
@@ -557,7 +628,7 @@ function showStopDetail(lat, lng, name) {
   routeDetailPanel.classList.remove('hidden');
 }
 
-// ============ LIVE BUSES – SMART GROUPING ============
+// ============ LIVE BUSES – SMART GROUPING + FILTERING + CLEANUP ============
 function listenToActiveBuses() {
   if (isListening) return;
   const ref = firebase.database().ref('activeBuses');
@@ -595,19 +666,49 @@ function listenToActiveBuses() {
   });
 }
 
+function cleanupStaleBuses() {
+  const now = Date.now();
+  let removed = false;
+  for (let key in activeBuses) {
+    const bus = activeBuses[key];
+    if (!bus.lastUpdate) continue;
+    if (now - bus.lastUpdate > REMOVE_THRESHOLD) {
+      if (key !== currentTripId) {
+        firebase.database().ref(`activeBuses/${key}`).remove().catch(() => {});
+        delete activeBuses[key];
+        removed = true;
+      }
+    }
+  }
+  if (removed) updateBusUI();
+}
+
 function updateBusUI() {
-  // Group by routeId – keep only the most recent per route
+  const now = Date.now();
+
+  // Filter out completely expired buses
+  const validBuses = Object.values(activeBuses).filter(bus => {
+    if (!bus.lat || !bus.lng || !bus.routeId) return false;
+    if (now - bus.lastUpdate > REMOVE_THRESHOLD) return false;
+    return true;
+  });
+
+  // Mark as estimated if stale (> 3 min)
+  validBuses.forEach(bus => {
+    bus.isEstimated = (now - bus.lastUpdate > STALE_THRESHOLD);
+  });
+
+  // Group by route (only most recent)
   const grouped = {};
-  Object.values(activeBuses).forEach(bus => {
-    if (!bus.lat || !bus.lng || !bus.routeId) return;
+  validBuses.forEach(bus => {
     if (!grouped[bus.routeId] || bus.lastUpdate > grouped[bus.routeId].lastUpdate) {
       grouped[bus.routeId] = bus;
     }
   });
 
-  const uniqueBuses = Object.values(grouped);
+  // Pass to map (which handles dead reckoning)
   updateBuses(grouped, routeData);
-  renderBusList(uniqueBuses);
+  renderBusList(Object.values(grouped));
 }
 
 function renderBusList(buses) {
@@ -624,13 +725,16 @@ function renderBusList(buses) {
   buses.forEach(bus => {
     const li = document.createElement('li');
     const route = routeData.find(r => r.id === bus.routeId);
-    const dir = bus.direction === 'forward' ? '🟦' : '🟧';
+    const isStale = (Date.now() - bus.lastUpdate > 120000);
+    const status = isStale ? '🟡 Stale' : '🟢 Live';
     const time = new Date(bus.lastUpdate).toLocaleTimeString();
+
     li.innerHTML = `
       <div class="bus-item">
         <span class="bus-number">${bus.routeId}</span>
         <span>${route ? route.name : ''}</span>
-        <span style="font-size:0.8rem;color:#666;">${dir}</span>
+        <span style="font-size:0.7rem;color:${isStale ? 'orange' : 'green'};">${status}</span>
+        <button class="report-btn" data-trip="${bus.tripId}" style="background:#f5a623;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;">📍 I see it</button>
         <span style="font-size:0.7rem;color:#999;">${time}</span>
       </div>
     `;
@@ -642,6 +746,16 @@ function renderBusList(buses) {
         updateFavoriteButton();
         showRouteDetail(bus.routeId);
       }
+    });
+    // Report button
+    li.querySelector('.report-btn').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const tripId = e.target.dataset.trip;
+      await firebase.database().ref(`activeBuses/${tripId}`).update({
+        lastUpdate: firebase.database.ServerValue.TIMESTAMP,
+        reportedBy: 'passenger'
+      });
+      showToast('✅ Bus position confirmed by passenger', 'success');
     });
     busList.appendChild(li);
   });
