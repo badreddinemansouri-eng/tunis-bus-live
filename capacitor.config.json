@@ -1,7 +1,7 @@
 {
   "appId": "com.yourcompany.tunisbuslive",
   "appName": "Tunis Bus Live",
-  "webDir": ".",
+  "webDir": "www",
   "bundledWebRuntime": false,
   "plugins": {
     "BackgroundGeolocation": {
