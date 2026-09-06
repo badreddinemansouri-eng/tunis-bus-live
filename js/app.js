@@ -1,6 +1,6 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – ULTIMATE EDITION (FIXED IMPORTS)
-// Works as PWA (web) AND native Android (Capacitor)
+// 🚌 TUNIS BUS LIVE – FULLY WORKING (Capacitor 4)
+// Background tracking works with screen off / phone locked
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap } from './map.js';
@@ -9,16 +9,16 @@ import { buildSearchIndex, search, getRoute } from './search.js';
 import { initPWA, isOnline, onOnline, onOffline } from './pwa.js';
 
 // ============ CONSTANTS ============
-const STALE_THRESHOLD = 3 * 60 * 1000; // 3 min – switch to "estimated"
-const REMOVE_THRESHOLD = 10 * 60 * 1000; // 10 min – remove completely
-const AUTO_END_TIMEOUT = 5 * 60; // 5 min stationary
-const CLEANUP_INTERVAL = 30000; // 30s
+const STALE_THRESHOLD = 3 * 60 * 1000;
+const REMOVE_THRESHOLD = 10 * 60 * 1000;
+const AUTO_END_TIMEOUT = 5 * 60;
+const CLEANUP_INTERVAL = 30000;
 
 // ============ STATE ============
 let currentView = 'passenger';
 let currentTripId = null;
 let watchId = null;
-let bgWatcherId = null; // for Capacitor background watcher
+let bgWatcherId = null;
 let routeData = [];
 let activeBuses = {};
 let favorites = [];
@@ -34,7 +34,6 @@ let driverLocation = null;
 let isTripActive = false;
 let cleanupTimer = null;
 
-// Determine if we're in a native Capacitor environment
 const isNative = window.Capacitor && Capacitor.isNative;
 
 // ============ DOM REFS ============
@@ -68,7 +67,7 @@ const busCount = $('busCount');
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v5.0 – ${isNative ? 'Native' : 'PWA'} mode`);
+  console.log(`🚌 Tunis Bus Live v5.0 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
   initPWA();
   await loadRoutes();
   setupTabs();
@@ -81,7 +80,6 @@ async function init() {
   map = initMap('map');
   listenToActiveBuses();
 
-  // Periodic stale cleanup
   if (cleanupTimer) clearInterval(cleanupTimer);
   cleanupTimer = setInterval(cleanupStaleBuses, CLEANUP_INTERVAL);
 
@@ -235,7 +233,6 @@ async function startTripConfirmed(routeId, direction) {
   const route = routeData.find(r => r.id === routeId);
   if (!route) { alert('Route not found'); return; }
 
-  // Check proximity
   if (navigator.geolocation) {
     try {
       const pos = await getCurrentPosition();
@@ -272,21 +269,24 @@ async function startTripConfirmed(routeId, direction) {
   isTripActive = true;
 
   // ============================================================
-  //  GEOLOCATION – NATIVE (Capacitor) vs WEB (navigator)
+  //  NATIVE BACKGROUND GEOLOCATION (Capacitor 4)
   // ============================================================
   if (isNative) {
-    // ----------------- NATIVE ANDROID (Background) ----------------
     try {
-      // Dynamic import of background geolocation plugin
+      // Dynamic import for Capacitor 4 plugin
       const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
+      
+      // Request permissions first
+      await BackgroundGeolocation.requestPermissions();
+      
       // Start background watcher
       bgWatcherId = await BackgroundGeolocation.addWatcher({
         backgroundMessage: 'Tunis Bus Live is tracking your bus',
         backgroundTitle: 'Bus Tracking Active',
-        requestPermissions: true,
+        requestPermissions: false,
         stale: false,
-        distanceFilter: 10, // meters
-        interval: 5000, // 5 seconds
+        distanceFilter: 10,
+        interval: 5000,
         notificationTitle: 'Tunis Bus Live',
         notificationText: 'Tracking your bus location',
         notificationIconColor: '#f5a623',
@@ -296,7 +296,6 @@ async function startTripConfirmed(routeId, direction) {
           console.error('BG location error:', error);
           return;
         }
-        // Update Firebase with native location
         driverLocation = location;
         driverSpeed = location.speed || 0;
         lastMovementTime = Date.now();
@@ -313,7 +312,7 @@ async function startTripConfirmed(routeId, direction) {
       driverStatus.innerHTML = '✅ Native background tracking active';
     } catch (e) {
       console.error('Failed to start background geolocation:', e);
-      // Fallback to web geolocation
+      showToast('Background tracking unavailable. Using web geolocation.', 'warning');
       startWebGeolocation();
     }
   } else {
@@ -321,7 +320,6 @@ async function startTripConfirmed(routeId, direction) {
     startWebGeolocation();
   }
 
-  // Save trip locally
   await saveTrip({ id: currentTripId, routeId, direction, driver, startedAt: Date.now(), endedAt: null });
 
   btnStartTrip.classList.add('hidden');
@@ -331,14 +329,13 @@ async function startTripConfirmed(routeId, direction) {
   driverStatus.innerHTML = `<i class="fas fa-check-circle" style="color:#27ae60;"></i> Trip started on ${routeId} (${direction})`;
   showToast(`🚌 Trip started on ${routeId}`, 'success');
 
-  // Auto‑end monitor
   if (autoEndTimer) clearInterval(autoEndTimer);
   autoEndTimer = setInterval(checkAutoEnd, 30000);
 
   setTimeout(() => switchView('passenger'), 500);
 }
 
-// ============ WEB GEOLOCATION ============
+// ============ WEB GEOLOCATION (Fallback) ============
 function startWebGeolocation() {
   watchId = navigator.geolocation.watchPosition(
     pos => {
@@ -367,7 +364,6 @@ function stopTrip() {
   // Stop native background watcher
   if (isNative && bgWatcherId) {
     try {
-      // Use dynamic import again for consistency
       import('@capacitor-community/background-geolocation').then(module => {
         module.BackgroundGeolocation.removeWatcher({ id: bgWatcherId });
       }).catch(() => {});
@@ -375,7 +371,6 @@ function stopTrip() {
     bgWatcherId = null;
   }
 
-  // Stop web watch
   if (watchId) {
     navigator.geolocation.clearWatch(watchId);
     watchId = null;
@@ -631,7 +626,7 @@ function showStopDetail(lat, lng, name) {
   routeDetailPanel.classList.remove('hidden');
 }
 
-// ============ LIVE BUSES – SMART GROUPING + FILTERING + CLEANUP ============
+// ============ LIVE BUSES ============
 function listenToActiveBuses() {
   if (isListening) return;
   const ref = firebase.database().ref('activeBuses');
@@ -689,19 +684,16 @@ function cleanupStaleBuses() {
 function updateBusUI() {
   const now = Date.now();
 
-  // Filter out completely expired buses
   const validBuses = Object.values(activeBuses).filter(bus => {
     if (!bus.lat || !bus.lng || !bus.routeId) return false;
     if (now - bus.lastUpdate > REMOVE_THRESHOLD) return false;
     return true;
   });
 
-  // Mark as estimated if stale (> 3 min)
   validBuses.forEach(bus => {
     bus.isEstimated = (now - bus.lastUpdate > STALE_THRESHOLD);
   });
 
-  // Group by route (only most recent)
   const grouped = {};
   validBuses.forEach(bus => {
     if (!grouped[bus.routeId] || bus.lastUpdate > grouped[bus.routeId].lastUpdate) {
@@ -709,7 +701,6 @@ function updateBusUI() {
     }
   });
 
-  // Pass to map (which handles dead reckoning)
   updateBuses(grouped, routeData);
   renderBusList(Object.values(grouped));
 }
@@ -750,7 +741,6 @@ function renderBusList(buses) {
         showRouteDetail(bus.routeId);
       }
     });
-    // Report button
     li.querySelector('.report-btn').addEventListener('click', async (e) => {
       e.stopPropagation();
       const tripId = e.target.dataset.trip;
