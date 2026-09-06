@@ -10,6 +10,6 @@
     "@capacitor/core": "^4.0.0",
     "@capacitor/cli": "^4.0.0",
     "@capacitor/android": "^4.0.0",
-    "@capacitor-community/background-geolocation": "^4.0.0"
+    "@capacitor-community/background-geolocation": "^1.2.0"
   }
 }
