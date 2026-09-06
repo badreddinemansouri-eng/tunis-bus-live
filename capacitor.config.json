@@ -1,0 +1,20 @@
+{
+  "appId": "com.yourcompany.tunisbuslive",
+  "appName": "Tunis Bus Live",
+  "webDir": ".",
+  "bundledWebRuntime": false,
+  "plugins": {
+    "BackgroundGeolocation": {
+      "locationUpdateInterval": 5000,
+      "desiredAccuracy": 0,
+      "stationaryRadius": 20,
+      "distanceFilter": 10,
+      "stopOnTerminate": false,
+      "startOnBoot": false,
+      "notificationTitle": "Tunis Bus Live",
+      "notificationText": "Tracking your bus location",
+      "notificationIconColor": "#f5a623",
+      "notificationIconLarge": "ic_stat_bus"
+    }
+  }
+}
