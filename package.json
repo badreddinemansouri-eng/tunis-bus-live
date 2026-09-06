@@ -7,9 +7,9 @@
     "build": "echo 'No build step required'"
   },
   "dependencies": {
-    "@capacitor/core": "latest",
-    "@capacitor/cli": "latest",
-    "@capacitor/android": "latest",
-    "@capacitor-community/background-geolocation": "latest"
+    "@capacitor/core": "^4.0.0",
+    "@capacitor/cli": "^4.0.0",
+    "@capacitor/android": "^4.0.0",
+    "@capacitor-community/background-geolocation": "^4.0.0"
   }
 }
