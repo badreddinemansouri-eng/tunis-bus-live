@@ -8,9 +8,15 @@
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <meta name="theme-color" content="#0d2b45">
   <meta name="description" content="Real‑time bus tracking for Tunis – live locations, route maps, and ETA predictions.">
+  <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Marker Cluster CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+  <!-- Font Awesome -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="css/style.css?v=5">
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="css/style.css?v=6">
   <!-- Capacitor bridge (needed for native plugins) -->
   <script src="https://unpkg.com/@capacitor/core@latest/dist/capacitor.js"></script>
 </head>
@@ -86,6 +92,15 @@
       </div>
     </section>
 
+    <!-- FULL SCREEN ROUTE VIEW -->
+    <div id="fullRoutePanel" class="full-route-panel hidden">
+      <div class="full-route-header">
+        <button id="closeFullRoute" class="btn btn-secondary" style="width:auto;padding:8px 16px;"><i class="fas fa-times"></i> Close</button>
+        <h2 id="fullRouteTitle">Route Details</h2>
+      </div>
+      <div id="fullRouteContent" class="full-route-content"></div>
+    </div>
+
     <!-- HISTORY PANEL -->
     <div id="historyPanel" class="history-panel hidden">
       <h3><i class="fas fa-history"></i> Trip History</h3>
@@ -94,13 +109,16 @@
     </div>
   </div>
 
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Marker Cluster JS -->
+  <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+  <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
-  <script src="js/firebase-config.js?v=5"></script>
-  <script src="js/routes.js?v=5"></script>
-  <script type="module" src="js/app.js?v=5"></script>
+  <script src="js/firebase-config.js?v=6"></script>
+  <script src="js/routes.js?v=6"></script>
+  <script type="module" src="js/app.js?v=6"></script>
 
   <!-- Service Worker Registration -->
   <script>
