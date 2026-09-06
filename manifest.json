@@ -1,0 +1,26 @@
+{
+  "name": "🚌 Tunis Bus Live",
+  "short_name": "Tunis Bus",
+  "description": "Real‑time bus tracking for Tunis",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d2b45",
+  "theme_color": "#f5a623",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["transport", "navigation"],
+  "lang": "en"
+}
