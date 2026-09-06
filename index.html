@@ -6,13 +6,8 @@
     <title>Tunis Bus Live</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="css/style.css?v=16">
-
-    <!-- Eruda: mobile console (remove in production if you want) -->
-    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-    <script>eruda.init();</script>
-
-    <!-- Firebase SDKs (compat) -->
+    <link rel="stylesheet" href="css/style.css?v=30">
+    <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 </head>
@@ -29,19 +24,16 @@
             </nav>
         </header>
 
-        <!-- ========== DRIVER VIEW ========== -->
+        <!-- DRIVER VIEW -->
         <section id="driverView" class="view active">
             <div class="card driver-card">
                 <h2><i class="fas fa-user"></i> Driver Panel</h2>
                 <label for="driverName">Your Name (optional)</label>
                 <input type="text" id="driverName" placeholder="e.g., Ahmed" autocomplete="name">
-
-                <!-- Driver search input – filters the dropdown -->
                 <div class="search-input" style="margin-top:8px;">
                     <i class="fas fa-magnifying-glass"></i>
                     <input type="text" id="driverSearchInput" placeholder="Search route..." autocomplete="off">
                 </div>
-
                 <div class="two-col">
                     <div>
                         <label for="routeSelect">Select Route</label>
@@ -61,7 +53,7 @@
             </div>
         </section>
 
-        <!-- ========== PASSENGER VIEW ========== -->
+        <!-- PASSENGER VIEW -->
         <section id="passengerView" class="view">
             <div class="card search-card">
                 <h2><i class="fas fa-search"></i> Find Your Bus or Stop</h2>
@@ -91,13 +83,9 @@
             </div>
         </section>
     </div>
-
-    <!-- Leaflet.js -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-    <!-- Our scripts (versioned to bust cache) -->
-    <script src="js/firebase-config.js?v=16"></script>
-    <script src="js/routes.js?v=16"></script>
-    <script src="js/app.js?v=16"></script>
+    <script src="js/firebase-config.js?v=30"></script>
+    <script src="js/routes.js?v=30"></script>
+    <script src="js/app.js?v=30"></script>
 </body>
 </html>
