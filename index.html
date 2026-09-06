@@ -8,17 +8,11 @@
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <meta name="theme-color" content="#0d2b45">
   <meta name="description" content="Real‑time bus tracking for Tunis – live locations, route maps, and ETA predictions.">
-  
-  <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <!-- Marker Cluster CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
-  <!-- Font Awesome -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <!-- Custom Styles -->
-  <link rel="stylesheet" href="css/style.css?v=7">
-  <!-- Capacitor bridge -->
+  <link rel="stylesheet" href="css/style.css?v=8">
   <script src="https://unpkg.com/@capacitor/core@latest/dist/capacitor.js"></script>
 </head>
 <body>
@@ -26,7 +20,8 @@
     <header>
       <div class="header-top">
         <h1><i class="fas fa-bus"></i> <span id="appTitle">Tunis Bus Live</span></h1>
-        <div style="display:flex;align-items:center;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <button id="adminToggle" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;color:white;font-size:0.7rem;cursor:pointer;">🔒 Admin</button>
           <select id="langSwitcher" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;font-size:0.8rem;">
             <option value="en">EN</option>
             <option value="fr">FR</option>
@@ -91,6 +86,7 @@
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
           <button id="favoriteBtn" class="btn btn-outline" style="width:auto;padding:8px 16px;"><i class="far fa-star"></i> <span data-i18n="favorite">Favorite</span></button>
           <button id="historyBtn" class="btn btn-outline" style="width:auto;padding:8px 16px;"><i class="fas fa-history"></i> <span data-i18n="history">History</span></button>
+          <button id="feedbackBtn" class="btn btn-outline" style="width:auto;padding:8px 16px;"><i class="fas fa-comment"></i> <span data-i18n="feedback">Feedback</span></button>
         </div>
       </div>
       <div id="routeDetailPanel" class="card route-detail hidden">
@@ -116,26 +112,56 @@
       </div>
     </div>
 
+    <!-- FEEDBACK MODAL -->
+    <div id="feedbackModal" class="modal hidden">
+      <div class="modal-content">
+        <h3>How was your ride?</h3>
+        <div style="display:flex;gap:10px;font-size:2rem;">
+          <span class="rating-star" data-rating="1">⭐</span>
+          <span class="rating-star" data-rating="2">⭐</span>
+          <span class="rating-star" data-rating="3">⭐</span>
+          <span class="rating-star" data-rating="4">⭐</span>
+          <span class="rating-star" data-rating="5">⭐</span>
+        </div>
+        <textarea id="feedbackText" placeholder="Any comments?" style="width:100%;margin:10px 0;padding:8px;border:2px solid #ddd;border-radius:8px;"></textarea>
+        <button id="submitFeedback" class="btn btn-primary" style="width:auto;padding:8px 16px;">Submit</button>
+        <button id="closeFeedback" class="btn btn-secondary" style="width:auto;padding:8px 16px;">Cancel</button>
+      </div>
+    </div>
+
+    <!-- ADMIN PANEL -->
+    <div id="adminPanel" class="admin-panel hidden">
+      <h3>📊 TTS Dashboard</h3>
+      <div id="adminStats" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0;">
+        <div class="stat-card"><span id="statBuses">0</span> Active Buses</div>
+        <div class="stat-card"><span id="statDrivers">0</span> Active Drivers</div>
+        <div class="stat-card"><span id="statRoutes">0</span> Routes</div>
+        <div class="stat-card"><span id="statTrips">0</span> Today's Trips</div>
+      </div>
+      <div id="adminBusList" style="max-height:200px;overflow-y:auto;"></div>
+      <button id="closeAdmin" class="btn btn-secondary" style="width:auto;padding:8px 16px;margin-top:10px;">Close</button>
+    </div>
+
     <!-- HISTORY PANEL -->
     <div id="historyPanel" class="history-panel hidden">
       <h3><i class="fas fa-history"></i> <span data-i18n="tripHistory">Trip History</span></h3>
       <div id="historyList"></div>
       <button id="btnCloseHistory" class="btn btn-secondary" style="width:auto;margin-top:12px;padding:8px 16px;"><i class="fas fa-times"></i> <span data-i18n="close">Close</span></button>
     </div>
+
+    <!-- FOOTER -->
+    <footer style="text-align:center;padding:16px;font-size:0.7rem;color:#999;">
+      <a href="/privacy.html" style="color:#666;">Privacy</a> · <a href="/terms.html" style="color:#666;">Terms</a> · v7.0
+    </footer>
   </div>
 
-  <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <!-- Marker Cluster JS -->
   <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
-  <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
-  <script src="js/firebase-config.js?v=7"></script>
-  <script src="js/routes.js?v=7"></script>
-  <script type="module" src="js/app.js?v=7"></script>
-
-  <!-- Service Worker -->
+  <script src="js/firebase-config.js?v=8"></script>
+  <script src="js/routes.js?v=8"></script>
+  <script type="module" src="js/app.js?v=8"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
