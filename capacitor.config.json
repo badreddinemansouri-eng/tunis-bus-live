@@ -15,6 +15,17 @@
       "notificationText": "Tracking your bus location",
       "notificationIconColor": "#f5a623",
       "notificationIconLarge": "ic_stat_bus"
+    },
+    "SplashScreen": {
+      "launchShowDuration": 3000,
+      "launchAutoHide": true,
+      "backgroundColor": "#0d2b45",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false
     }
+  },
+  "android": {
+    "icon": "icons/icon-512.png"
   }
 }
