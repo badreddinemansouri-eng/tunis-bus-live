@@ -24,7 +24,6 @@ jobs:
         run: |
           mkdir -p www
           cp -r index.html manifest.json sw.js css js icons capacitor.config.json package.json www/ 2>/dev/null || true
-          # If you have other assets, add them here
 
       - name: Add Android platform
         run: npx cap add android
