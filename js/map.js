@@ -1,3 +1,5 @@
+// ============ MAP.JS – SMART & SMOOTH ============
+
 import { getRoutes } from './db.js';
 
 let map = null;
@@ -5,9 +7,8 @@ let routeLayer = null;
 let busMarkers = {};
 let routeData = [];
 let activeBuses = {};
-let etaCache = {};
-let selectedRouteId = null;
-let popupTimeout = null;
+let animationFrame = null;
+let lastUpdateTime = {};
 
 export function initMap(containerId, center = [36.8065, 10.1815], zoom = 12) {
   if (map) return map;
@@ -19,6 +20,10 @@ export function initMap(containerId, center = [36.8065, 10.1815], zoom = 12) {
   L.control.scale({ metric: true, imperial: false }).addTo(map);
   routeLayer = L.layerGroup().addTo(map);
   addLegend();
+  // Start animation loop for smooth movement
+  if (!animationFrame) {
+    animationFrame = requestAnimationFrame(smoothMove);
+  }
   return map;
 }
 
@@ -28,11 +33,10 @@ function addLegend() {
       const div = L.DomUtil.create('div', 'map-legend');
       div.innerHTML = `
         <strong>Legend</strong>
-        <div><span style="color:#2196F3;">●</span> Aller (outbound)</div>
-        <div><span style="color:#FF9800;">●</span> Retour (inbound)</div>
+        <div><span style="color:#2196F3;">●</span> Aller</div>
+        <div><span style="color:#FF9800;">●</span> Retour</div>
         <div><span style="color:#4CAF50;">●</span> Active Bus</div>
         <div><span style="font-size:0.7rem;">⬤</span> Stop</div>
-        <div style="margin-top:4px;font-size:0.7rem;color:#666;">Tap a bus for details</div>
       `;
       return div;
     }
@@ -47,11 +51,9 @@ export function clearMap() {
   }
   busMarkers = {};
   activeBuses = {};
-  etaCache = {};
 }
 
 export function showRoute(routeId, routes) {
-  selectedRouteId = routeId;
   const route = routes.find(r => r.id === routeId);
   if (!route) return;
   if (!routeLayer) return;
@@ -60,29 +62,15 @@ export function showRoute(routeId, routes) {
   // Aller (blue)
   if (route.aller && route.aller.length > 1) {
     const coords = route.aller.map(s => [s.lat, s.lng]);
-    const line = L.polyline(coords, {
-      color: '#2196F3',
-      weight: 5,
-      opacity: 0.9,
-      className: 'route-aller'
-    }).addTo(routeLayer);
-    line.bindPopup('🟦 Aller (outbound)');
+    L.polyline(coords, { color: '#2196F3', weight: 5, opacity: 0.9 }).addTo(routeLayer);
   }
-
   // Retour (orange, dashed)
   if (route.retour && route.retour.length > 1) {
     const coords = route.retour.map(s => [s.lat, s.lng]);
-    const line = L.polyline(coords, {
-      color: '#FF9800',
-      weight: 5,
-      opacity: 0.9,
-      dashArray: '8, 6',
-      className: 'route-retour'
-    }).addTo(routeLayer);
-    line.bindPopup('🟧 Retour (inbound)');
+    L.polyline(coords, { color: '#FF9800', weight: 5, opacity: 0.9, dashArray: '8, 6' }).addTo(routeLayer);
   }
 
-  // Stops with direction labels
+  // Stops
   const stopSet = new Map();
   route.stops.forEach(stop => {
     const key = `${stop.lat},${stop.lng}`;
@@ -96,16 +84,12 @@ export function showRoute(routeId, routes) {
       }).addTo(routeLayer);
       const hasAller = route.aller.some(s => s.lat === stop.lat && s.lng === stop.lng);
       const hasRetour = route.retour.some(s => s.lat === stop.lat && s.lng === stop.lng);
-      let dir = '';
-      if (hasAller && hasRetour) dir = '↕';
-      else if (hasAller) dir = '↑';
-      else if (hasRetour) dir = '↓';
+      let dir = hasAller && hasRetour ? '↕' : hasAller ? '↑' : '↓';
       marker.bindPopup(`<b>${stop.name}</b> ${dir}`);
       stopSet.set(key, marker);
     }
   });
 
-  // Fit bounds
   const allCoords = route.stops.map(s => [s.lat, s.lng]);
   if (allCoords.length > 0) {
     const bounds = L.latLngBounds(allCoords);
@@ -114,29 +98,39 @@ export function showRoute(routeId, routes) {
 }
 
 export function updateBuses(buses, routes) {
+  // buses is an object grouped by routeId (only the most recent per route)
   activeBuses = buses;
   const now = Date.now();
 
-  // Remove old markers
-  const activeKeys = Object.keys(buses);
+  // Remove markers for routes that no longer have a bus
+  const activeRouteIds = Object.keys(buses);
   for (let key in busMarkers) {
-    if (!activeKeys.includes(key)) {
+    if (!activeRouteIds.includes(key)) {
       map.removeLayer(busMarkers[key]);
       delete busMarkers[key];
     }
   }
 
-  activeKeys.forEach(key => {
-    const bus = buses[key];
+  activeRouteIds.forEach(routeId => {
+    const bus = buses[routeId];
     if (!bus.lat || !bus.lng) return;
-    const route = routes.find(r => r.id === bus.routeId);
+    const route = routes.find(r => r.id === routeId);
     if (!route) return;
 
     const isAller = bus.direction === 'forward';
     const color = isAller ? '#4CAF50' : '#FF6B6B';
     const dirArrow = isAller ? '↑' : '↓';
 
-    // Create custom icon with direction arrow
+    // Store previous position and time for smoothing
+    if (!lastUpdateTime[routeId]) {
+      lastUpdateTime[routeId] = { lat: bus.lat, lng: bus.lng, time: now };
+    } else {
+      // Update only if new data is fresh
+      if (bus.lastUpdate > lastUpdateTime[routeId].time) {
+        lastUpdateTime[routeId] = { lat: bus.lat, lng: bus.lng, time: now };
+      }
+    }
+
     const icon = L.divIcon({
       className: 'bus-marker',
       html: `
@@ -158,61 +152,51 @@ export function updateBuses(buses, routes) {
       ${bus.speed ? `Speed: ${(bus.speed * 3.6).toFixed(1)} km/h` : ''}
     `;
 
-    if (busMarkers[key]) {
-      busMarkers[key].setLatLng([bus.lat, bus.lng]);
-      busMarkers[key].setPopupContent(popupContent);
-    } else {
-      busMarkers[key] = L.marker([bus.lat, bus.lng], { icon })
+    if (!busMarkers[routeId]) {
+      busMarkers[routeId] = L.marker([bus.lat, bus.lng], { icon })
         .addTo(map)
         .bindPopup(popupContent);
-    }
-
-    // ETA calculation (if we have route data)
-    if (route.stops && route.stops.length > 0) {
-      const nearestStop = findNearestStop(bus.lat, bus.lng, route.stops);
-      if (nearestStop) {
-        const stopIndex = route.stops.indexOf(nearestStop);
-        if (stopIndex !== -1 && stopIndex < route.stops.length - 2) {
-          const nextStops = route.stops.slice(stopIndex + 1, stopIndex + 4);
-          const eta = now + (nextStops.length * 60 * 1000); // rough: 1 min per stop
-          const etaTime = new Date(eta);
-          // Cache ETA
-          etaCache[key] = etaTime;
-          // Update popup with ETA
-          const etaText = etaTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          if (busMarkers[key]) {
-            const currentPopup = busMarkers[key].getPopup().getContent();
-            if (!currentPopup.includes('ETA')) {
-              busMarkers[key].setPopupContent(
-                popupContent + `<br>⏱ ETA to next stop: ~${etaText}`
-              );
-            }
-          }
-        }
-      }
+    } else {
+      // The marker exists; we'll update its position in the animation loop
+      // Just store the target position
+      busMarkers[routeId]._targetLat = bus.lat;
+      busMarkers[routeId]._targetLng = bus.lng;
+      // Update popup if needed
+      busMarkers[routeId].setPopupContent(popupContent);
     }
   });
 }
 
-function findNearestStop(lat, lng, stops) {
-  let minDist = Infinity;
-  let nearest = null;
-  stops.forEach(stop => {
-    const d = haversineDistance(lat, lng, stop.lat, stop.lng);
-    if (d < minDist) {
-      minDist = d;
-      nearest = stop;
-    }
-  });
-  return (minDist < 0.5) ? nearest : null;
-}
+// Smooth movement animation loop
+function smoothMove() {
+  if (!map) { animationFrame = requestAnimationFrame(smoothMove); return; }
+  const now = Date.now();
 
-function haversineDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  for (let routeId in busMarkers) {
+    const marker = busMarkers[routeId];
+    if (!marker._targetLat || !marker._targetLng) continue;
+
+    // Calculate current position by interpolating towards target
+    const currentLat = marker.getLatLng().lat;
+    const currentLng = marker.getLatLng().lng;
+    const dLat = marker._targetLat - currentLat;
+    const dLng = marker._targetLng - currentLng;
+
+    // If far, snap; else smooth
+    const dist = Math.sqrt(dLat*dLat + dLng*dLng);
+    if (dist < 0.0001) {
+      // Snap if very close
+      marker.setLatLng([marker._targetLat, marker._targetLng]);
+    } else {
+      // Move towards target with a smoothing factor (0.15 per frame ~ 15% per frame)
+      const factor = 0.15;
+      const newLat = currentLat + dLat * factor;
+      const newLng = currentLng + dLng * factor;
+      marker.setLatLng([newLat, newLng]);
+    }
+  }
+
+  animationFrame = requestAnimationFrame(smoothMove);
 }
 
 export function focusStop(lat, lng, name) {
