@@ -1,0 +1,5 @@
+# Capacitor / Android build output
+android/
+node_modules/
+*.apk
+*.aab
