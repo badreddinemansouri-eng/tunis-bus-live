@@ -1,6 +1,8 @@
 {
   "name": "tunis-bus-live",
   "version": "5.0.0",
+  "description": "Real-time bus tracking for Tunis",
+  "main": "index.html",
   "scripts": {
     "build": "echo 'No build step required'"
   },
@@ -8,6 +10,6 @@
     "@capacitor/core": "^5.0.0",
     "@capacitor/cli": "^5.0.0",
     "@capacitor/android": "^5.0.0",
-    "@capacitor-community/background-geolocation": "^5.0.0"
+    "@capacitor-community/background-geolocation": "^4.0.0"
   }
 }
