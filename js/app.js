@@ -1,5 +1,5 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – FULLY WORKING (Capacitor 4)
+// 🚌 TUNIS BUS LIVE – WORKING (Capacitor 4 + v1.2.0)
 // Background tracking works with screen off / phone locked
 // ============================================================
 
@@ -269,17 +269,14 @@ async function startTripConfirmed(routeId, direction) {
   isTripActive = true;
 
   // ============================================================
-  //  NATIVE BACKGROUND GEOLOCATION (Capacitor 4)
+  //  NATIVE BACKGROUND GEOLOCATION (Capacitor 4 + v1.2.0)
   // ============================================================
   if (isNative) {
     try {
-      // Dynamic import for Capacitor 4 plugin
       const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
       
-      // Request permissions first
       await BackgroundGeolocation.requestPermissions();
       
-      // Start background watcher
       bgWatcherId = await BackgroundGeolocation.addWatcher({
         backgroundMessage: 'Tunis Bus Live is tracking your bus',
         backgroundTitle: 'Bus Tracking Active',
@@ -316,7 +313,6 @@ async function startTripConfirmed(routeId, direction) {
       startWebGeolocation();
     }
   } else {
-    // ----------------- WEB (navigator.geolocation) ----------------
     startWebGeolocation();
   }
 
@@ -361,7 +357,6 @@ function startWebGeolocation() {
 
 // ============ STOP TRIP ============
 function stopTrip() {
-  // Stop native background watcher
   if (isNative && bgWatcherId) {
     try {
       import('@capacitor-community/background-geolocation').then(module => {
