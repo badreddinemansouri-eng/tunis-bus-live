@@ -1,28 +1,53 @@
-// ============ MAP.JS – WITH DEAD RECKONING ============
+// ============================================================
+// MAP.JS – PROFESSIONAL PERFORMANCE
+// Uses marker clustering, canvas for routes, smooth updates
+// ============================================================
 
-import { getRoutes } from './db.js';
+// Note: Leaflet and MarkerCluster are loaded via CDN in index.html
 
 let map = null;
 let routeLayer = null;
 let busMarkers = {};
-let routeData = [];
-let activeBuses = {};
+let clusterGroup = null;
+let routePolyline = null;
 let animationFrame = null;
 let lastUpdateTime = {};
+let isMapReady = false;
 
 export function initMap(containerId, center = [36.8065, 10.1815], zoom = 12) {
   if (map) return map;
-  map = L.map(containerId, { zoomControl: true }).setView(center, zoom);
+  
+  map = L.map(containerId, {
+    zoomControl: true,
+    fadeAnimation: true,
+    zoomAnimation: true,
+    markerZoomAnimation: true
+  }).setView(center, zoom);
+
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors',
-    maxZoom: 19
+    attribution: '© OpenStreetMap',
+    maxZoom: 19,
+    crossOrigin: true
   }).addTo(map);
+
   L.control.scale({ metric: true, imperial: false }).addTo(map);
+
+  // Cluster group for stops
+  clusterGroup = L.markerClusterGroup({
+    maxClusterRadius: 30,
+    spiderfyOnMaxZoom: true,
+    showCoverageOnHover: false,
+    zoomToBoundsOnClick: true
+  });
+  map.addLayer(clusterGroup);
+
   routeLayer = L.layerGroup().addTo(map);
+
   addLegend();
-  if (!animationFrame) {
-    animationFrame = requestAnimationFrame(smoothMove);
-  }
+
+  isMapReady = true;
+  animationFrame = requestAnimationFrame(smoothMove);
+
   return map;
 }
 
@@ -35,7 +60,7 @@ function addLegend() {
         <div><span style="color:#2196F3;">●</span> Aller</div>
         <div><span style="color:#FF9800;">●</span> Retour</div>
         <div><span style="color:#4CAF50;">●</span> Live Bus</div>
-        <div><span style="color:#FFD700;">●</span> Estimated Bus</div>
+        <div><span style="color:#FFD700;">●</span> Estimated</div>
         <div><span style="font-size:0.7rem;">⬤</span> Stop</div>
       `;
       return div;
@@ -46,11 +71,15 @@ function addLegend() {
 
 export function clearMap() {
   if (routeLayer) routeLayer.clearLayers();
+  if (clusterGroup) clusterGroup.clearLayers();
   for (let key in busMarkers) {
     if (busMarkers[key]) map.removeLayer(busMarkers[key]);
   }
   busMarkers = {};
-  activeBuses = {};
+  if (routePolyline) {
+    map.removeLayer(routePolyline);
+    routePolyline = null;
+  }
 }
 
 export function showRoute(routeId, routes) {
@@ -58,35 +87,53 @@ export function showRoute(routeId, routes) {
   if (!route) return;
   if (!routeLayer) return;
   routeLayer.clearLayers();
+  if (clusterGroup) clusterGroup.clearLayers();
 
+  // Draw Aller (blue)
   if (route.aller && route.aller.length > 1) {
     const coords = route.aller.map(s => [s.lat, s.lng]);
-    L.polyline(coords, { color: '#2196F3', weight: 5, opacity: 0.9 }).addTo(routeLayer);
+    const line = L.polyline(coords, {
+      color: '#2196F3',
+      weight: 5,
+      opacity: 0.9,
+      smoothFactor: 1
+    }).addTo(routeLayer);
+    line.bindPopup('🟦 Aller (outbound)');
+    routePolyline = line;
   }
+
+  // Draw Retour (orange dashed)
   if (route.retour && route.retour.length > 1) {
     const coords = route.retour.map(s => [s.lat, s.lng]);
-    L.polyline(coords, { color: '#FF9800', weight: 5, opacity: 0.9, dashArray: '8, 6' }).addTo(routeLayer);
+    const line = L.polyline(coords, {
+      color: '#FF9800',
+      weight: 5,
+      opacity: 0.9,
+      dashArray: '8, 6',
+      smoothFactor: 1
+    }).addTo(routeLayer);
+    line.bindPopup('🟧 Retour (inbound)');
   }
 
-  const stopSet = new Map();
+  // Add all stops to cluster
+  const stopMarkers = [];
   route.stops.forEach(stop => {
-    const key = `${stop.lat},${stop.lng}`;
-    if (!stopSet.has(key)) {
-      const marker = L.circleMarker([stop.lat, stop.lng], {
-        radius: 5,
-        color: '#3498db',
-        fillColor: '#fff',
-        fillOpacity: 1,
-        weight: 2
-      }).addTo(routeLayer);
-      const hasAller = route.aller.some(s => s.lat === stop.lat && s.lng === stop.lng);
-      const hasRetour = route.retour.some(s => s.lat === stop.lat && s.lng === stop.lng);
-      let dir = hasAller && hasRetour ? '↕' : hasAller ? '↑' : '↓';
-      marker.bindPopup(`<b>${stop.name}</b> ${dir}`);
-      stopSet.set(key, marker);
-    }
+    const hasAller = route.aller.some(s => s.lat === stop.lat && s.lng === stop.lng);
+    const hasRetour = route.retour.some(s => s.lat === stop.lat && s.lng === stop.lng);
+    let dir = hasAller && hasRetour ? '↕' : hasAller ? '↑' : '↓';
+    const marker = L.circleMarker([stop.lat, stop.lng], {
+      radius: 5,
+      color: '#3498db',
+      fillColor: '#fff',
+      fillOpacity: 1,
+      weight: 2
+    });
+    marker.bindPopup(`<b>${stop.name}</b> ${dir}`);
+    stopMarkers.push(marker);
   });
+  clusterGroup.addLayers(stopMarkers);
 
+  // Fit bounds
   const allCoords = route.stops.map(s => [s.lat, s.lng]);
   if (allCoords.length > 0) {
     const bounds = L.latLngBounds(allCoords);
@@ -95,12 +142,10 @@ export function showRoute(routeId, routes) {
 }
 
 export function updateBuses(buses, routes) {
-  // buses is an object grouped by routeId
-  activeBuses = buses;
   const now = Date.now();
+  const activeRouteIds = Object.keys(buses);
 
   // Remove markers for routes no longer present
-  const activeRouteIds = Object.keys(buses);
   for (let key in busMarkers) {
     if (!activeRouteIds.includes(key)) {
       map.removeLayer(busMarkers[key]);
@@ -120,10 +165,10 @@ export function updateBuses(buses, routes) {
     const dirArrow = isAller ? '↑' : '↓';
     const label = isEstimated ? `${bus.routeId}*` : bus.routeId;
 
-    // ----- Dead Reckoning (if estimated and moving) -----
+    // Dead reckoning
     if (isEstimated && bus.speed && bus.speed > 0.5 && route) {
       const elapsedSeconds = (now - bus.lastUpdate) / 1000;
-      const distance = bus.speed * elapsedSeconds; // meters
+      const distance = bus.speed * elapsedSeconds;
       const stops = (bus.direction === 'forward') ? route.aller : route.retour;
       if (stops && stops.length > 0) {
         let nearestIdx = 0;
@@ -186,6 +231,7 @@ export function updateBuses(buses, routes) {
       Driver: ${bus.driverName || 'Unknown'}<br>
       ${bus.speed ? `Speed: ${(bus.speed * 3.6).toFixed(1)} km/h` : ''}
       ${isStale ? '<br><button id="reportBtn" style="background:#f5a623;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;">📍 I see this bus</button>' : ''}
+      <br><button id="fullRouteBtn" style="background:#3498db;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;color:white;margin-top:4px;">🗺️ View Full Route</button>
     `;
 
     if (!busMarkers[routeId]) {
@@ -198,17 +244,24 @@ export function updateBuses(buses, routes) {
       busMarkers[routeId].setPopupContent(popupContent);
     }
 
-    // Attach report button listener after popup opens
+    // Report button listener
     busMarkers[routeId].on('popupopen', function() {
       setTimeout(() => {
-        const btn = document.getElementById('reportBtn');
-        if (btn) {
-          btn.addEventListener('click', function() {
+        const reportBtn = document.getElementById('reportBtn');
+        if (reportBtn) {
+          reportBtn.addEventListener('click', function() {
             firebase.database().ref(`activeBuses/${bus.tripId}`).update({
               lastUpdate: firebase.database.ServerValue.TIMESTAMP,
               reportedBy: 'passenger'
             });
             showToast('✅ Bus position confirmed!', 'success');
+            busMarkers[routeId].closePopup();
+          });
+        }
+        const fullRouteBtn = document.getElementById('fullRouteBtn');
+        if (fullRouteBtn) {
+          fullRouteBtn.addEventListener('click', function() {
+            window.showFullRoute(routeId, bus);
             busMarkers[routeId].closePopup();
           });
         }
@@ -235,7 +288,7 @@ function smoothMove() {
     if (dist < 0.0001) {
       marker.setLatLng([marker._targetLat, marker._targetLng]);
     } else {
-      const factor = 0.15;
+      const factor = 0.2;
       const newLat = currentLat + dLat * factor;
       const newLng = currentLng + dLng * factor;
       marker.setLatLng([newLat, newLng]);
@@ -252,12 +305,6 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
-
-// Re‑export showToast from global (app.js sets window.showToast)
-const showToast = (msg, type) => {
-  if (window.showToast) window.showToast(msg, type);
-  else console.log(msg);
-};
 
 export function focusStop(lat, lng, name) {
   if (!map) return;
