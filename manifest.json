@@ -1,9 +1,9 @@
 {
-  "name": "🚌 Tunis Bus Live",
-  "short_name": "Tunis Bus",
+  "name": "Tunis Bus Live",
+  "short_name": "TunisBus",
   "description": "Real‑time bus tracking for Tunis",
   "start_url": "/",
-  "display": "standalone",
+  "display": "fullscreen",
   "background_color": "#0d2b45",
   "theme_color": "#f5a623",
   "orientation": "portrait",
