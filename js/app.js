@@ -1,3 +1,8 @@
+// ============================================================
+// 🚌 TUNIS BUS LIVE – SMART EDITION
+// Complete app.js – handles all edge cases, grouping, auto‑end
+// ============================================================
+
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap } from './map.js';
 import { openDB, saveRoutes, getRoutes, saveTrip, getTrips, toggleFavorite, getFavorites } from './db.js';
 import { buildSearchIndex, search, getRoute } from './search.js';
@@ -15,10 +20,14 @@ let map = null;
 let driverName = '';
 let selectedRouteId = null;
 let selectedDirection = 'forward';
+let autoEndTimer = null;
+let lastMovementTime = Date.now();
+let driverSpeed = 0;
+let driverLocation = null;
+let isTripActive = false;
 
 // ============ DOM REFS ============
 const $ = (id) => document.getElementById(id);
-const app = $('app');
 const driverView = $('driverView');
 const passengerView = $('passengerView');
 const tabDriver = $('tabDriver');
@@ -44,16 +53,13 @@ const historyBtn = $('historyBtn');
 const historyPanel = $('historyPanel');
 const historyList = $('historyList');
 const btnCloseHistory = $('btnCloseHistory');
+const busCount = $('busCount');
 
 // ============ INIT ============
 async function init() {
-  console.log('🚌 Tunis Bus Live v3.0');
+  console.log('🚌 Tunis Bus Live v4.0 – Smart Edition');
   initPWA();
-
-  // Load routes
   await loadRoutes();
-
-  // Setup UI
   setupTabs();
   setupDriverUI();
   setupPassengerUI();
@@ -61,14 +67,8 @@ async function init() {
   setupHistory();
   setupFavorites();
   setupConnection();
-
-  // Initialize map in passenger view
   map = initMap('map');
-
-  // Start listening to active buses
   listenToActiveBuses();
-
-  // Check online status
   onOnline(() => {
     connectionStatus.textContent = 'Online ✅';
     connectionStatus.className = 'connection-badge online';
@@ -79,12 +79,8 @@ async function init() {
     connectionStatus.className = 'connection-badge offline';
     showToast('You are offline. Live updates paused.', 'warning');
   });
-
-  // Load favorites
   favorites = await getFavorites();
   updateFavoriteButton();
-
-  // Auto-detect route in driver mode
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       pos => autoDetectRoute(pos.coords.latitude, pos.coords.longitude),
@@ -92,14 +88,12 @@ async function init() {
       { timeout: 5000, enableHighAccuracy: false }
     );
   }
-
   console.log('✅ App ready');
 }
 
 // ============ LOAD ROUTES ============
 async function loadRoutes() {
   try {
-    // Try IndexedDB first
     let routes = await getRoutes();
     if (routes && routes.length > 0) {
       routeData = routes;
@@ -107,8 +101,6 @@ async function loadRoutes() {
       populateRouteSelects();
       return;
     }
-
-    // Fallback to routesData (from routes.js)
     if (typeof routesData !== 'undefined' && routesData.length > 0) {
       routeData = routesData;
       await saveRoutes(routeData);
@@ -116,8 +108,6 @@ async function loadRoutes() {
       populateRouteSelects();
       return;
     }
-
-    // If all fails, try fetch
     const resp = await fetch('/js/routes.js');
     const text = await resp.text();
     const match = text.match(/routesData\s*=\s*(\[[\s\S]*?\]);/);
@@ -142,8 +132,6 @@ function populateRouteSelects() {
     opt.textContent = `${route.id} - ${route.name}`;
     routeSelect.appendChild(opt);
   });
-
-  // Driver search filter
   if (driverSearchInput) {
     driverSearchInput.addEventListener('input', function() {
       const q = this.value.toLowerCase();
@@ -153,8 +141,6 @@ function populateRouteSelects() {
       }
     });
   }
-
-  // Build search index
   buildSearchIndex();
 }
 
@@ -171,7 +157,6 @@ function switchView(view) {
     passengerView.classList.remove('active');
     tabDriver.classList.add('active');
     tabPassenger.classList.remove('active');
-    // Stop live updates in passenger view to save resources
     if (isListening) {
       firebase.database().ref('activeBuses').off();
       isListening = false;
@@ -193,11 +178,15 @@ function setupDriverUI() {
 }
 
 async function startTrip() {
+  if (isTripActive) {
+    showToast('Trip already active', 'warning');
+    return;
+  }
+
   let routeId = routeSelect.value;
   let direction = directionSelect.value;
 
   if (!routeId) {
-    // Auto-detect
     driverStatus.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Detecting route...';
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -221,7 +210,6 @@ async function startTrip() {
     alert('Please select a route');
     return;
   }
-
   startTripConfirmed(routeId, direction);
 }
 
@@ -263,14 +251,19 @@ async function startTripConfirmed(routeId, direction) {
     return;
   }
 
+  isTripActive = true;
+
   // Start location tracking
   watchId = navigator.geolocation.watchPosition(
     pos => {
+      driverLocation = pos.coords;
+      driverSpeed = pos.coords.speed || 0;
+      lastMovementTime = Date.now();
       firebase.database().ref(`activeBuses/${currentTripId}`).update({
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
         accuracy: pos.coords.accuracy,
-        speed: pos.coords.speed || 0,
+        speed: driverSpeed,
         heading: pos.coords.heading || 0,
         lastUpdate: firebase.database.ServerValue.TIMESTAMP
       });
@@ -299,7 +292,10 @@ async function startTripConfirmed(routeId, direction) {
   driverStatus.innerHTML = `<i class="fas fa-check-circle" style="color:#27ae60;"></i> Trip started on ${routeId} (${direction})`;
   showToast(`🚌 Trip started on ${routeId}`, 'success');
 
-  // Switch to passenger view to see the bus
+  // Start auto‑end monitor
+  if (autoEndTimer) clearInterval(autoEndTimer);
+  autoEndTimer = setInterval(checkAutoEnd, 30000); // check every 30s
+
   setTimeout(() => switchView('passenger'), 500);
 }
 
@@ -310,9 +306,13 @@ function stopTrip() {
   }
   if (currentTripId) {
     firebase.database().ref(`activeBuses/${currentTripId}`).remove();
-    // Update local trip history
     saveTrip({ id: currentTripId, endedAt: Date.now() });
     currentTripId = null;
+  }
+  isTripActive = false;
+  if (autoEndTimer) {
+    clearInterval(autoEndTimer);
+    autoEndTimer = null;
   }
   btnStartTrip.classList.remove('hidden');
   btnStopTrip.classList.add('hidden');
@@ -322,6 +322,28 @@ function stopTrip() {
   showToast('🚏 Trip ended', 'info');
 }
 
+// ============ AUTO‑END LOGIC ============
+function checkAutoEnd() {
+  if (!currentTripId || !isTripActive) return;
+  if (!driverLocation) return;
+
+  const now = Date.now();
+  const timeSinceMove = (now - lastMovementTime) / 1000; // seconds
+
+  // If stationary for > 5 minutes, prompt user
+  if (driverSpeed < 0.5 && timeSinceMove > 300) {
+    if (!confirm('⚠️ You haven\'t moved for 5 minutes. Did you end your trip? Click OK to end, Cancel to continue.')) {
+      // User cancelled – reset timer
+      lastMovementTime = now;
+      return;
+    }
+    // Auto‑end
+    showToast('🛑 Trip auto‑ended due to inactivity', 'warning');
+    stopTrip();
+  }
+}
+
+// ============ AUTO‑DETECT ROUTE ============
 function autoDetectRoute(lat, lng) {
   let best = null, bestDist = Infinity, bestDir = 'forward';
   routeData.forEach(route => {
@@ -363,7 +385,6 @@ function getCurrentPosition() {
 function setupPassengerUI() {
   btnCloseDetail.addEventListener('click', () => routeDetailPanel.classList.add('hidden'));
 
-  // Refresh buses button
   const refreshBtn = document.createElement('button');
   refreshBtn.className = 'btn btn-secondary';
   refreshBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
@@ -473,7 +494,6 @@ async function handleSearch() {
         updateFavoriteButton();
         searchInput.value = '';
         searchResults.classList.add('hidden');
-        // Show route detail
         showRouteDetail(routeId);
       } else if (type === 'stop') {
         const lat = parseFloat(this.dataset.stoplat);
@@ -500,17 +520,16 @@ function showRouteDetail(routeId) {
       ${route.stops.map(s => `<div class="stop-item"><i class="fas fa-circle" style="font-size:8px;color:#3498db;"></i> ${s.name}</div>`).join('')}
     </div>
     <div style="margin-top:10px;display:flex;gap:10px;">
-      <button class="btn btn-primary" style="width:auto;padding:8px 16px;" onclick="showOnMap('${routeId}')">
+      <button class="btn btn-primary" style="width:auto;padding:8px 16px;" onclick="window.showOnMap('${routeId}')">
         <i class="fas fa-map"></i> Show on map
       </button>
-      <button class="btn btn-secondary" style="width:auto;padding:8px 16px;background:${isFav ? '#f5a623' : '#e0e0e0'};color:${isFav ? '#0d2b45' : '#333'};" onclick="toggleFavoriteRoute('${routeId}')">
+      <button class="btn btn-secondary" style="width:auto;padding:8px 16px;background:${isFav ? '#f5a623' : '#e0e0e0'};color:${isFav ? '#0d2b45' : '#333'};" onclick="window.toggleFavoriteRoute('${routeId}')">
         <i class="fas fa-star"></i>
       </button>
     </div>
   `;
   routeDetailPanel.classList.remove('hidden');
 
-  // Expose to global for onclick
   window.showOnMap = (id) => {
     showRoute(id, routeData);
     updateFavoriteButton();
@@ -531,20 +550,19 @@ function showStopDetail(lat, lng, name) {
     <ul>
       ${routesWithStop.map(r => `<li>${r.id} - ${r.name}</li>`).join('')}
     </ul>
-    <button class="btn btn-primary" style="width:auto;padding:8px 16px;margin-top:8px;" onclick="focusStop(${lat}, ${lng}, '${name}')">
+    <button class="btn btn-primary" style="width:auto;padding:8px 16px;margin-top:8px;" onclick="window.focusStop(${lat}, ${lng}, '${name}')">
       <i class="fas fa-location-dot"></i> Center
     </button>
   `;
   routeDetailPanel.classList.remove('hidden');
 }
 
-// ============ LIVE BUSES ============
+// ============ LIVE BUSES – SMART GROUPING ============
 function listenToActiveBuses() {
   if (isListening) return;
   const ref = firebase.database().ref('activeBuses');
   isListening = true;
 
-  // Clear existing markers
   clearMap();
 
   ref.on('child_added', snap => {
@@ -566,7 +584,6 @@ function listenToActiveBuses() {
     updateBusUI();
   });
 
-  // Also listen to connection status
   firebase.database().ref('.info/connected').on('value', snap => {
     if (snap.val() === true) {
       connectionStatus.textContent = 'Online ✅';
@@ -579,43 +596,36 @@ function listenToActiveBuses() {
 }
 
 function updateBusUI() {
-  // Convert to array
-  const busArray = Object.values(activeBuses).filter(b => b.lat && b.lng && b.routeId);
-
-  // Update map
-  updateBuses(activeBuses, routeData);
-
-  // Update bus list
-  renderBusList(busArray);
-}
-
-function renderBusList(busesArray) {
-  if (!busList) return;
-  busList.innerHTML = '';
-
-  const buses = busesArray || Object.values(activeBuses).filter(b => b.lat && b.lng && b.routeId);
-
-  if (buses.length === 0) {
-    noBuses.style.display = 'block';
-    return;
-  }
-
-  noBuses.style.display = 'none';
-
-  // Group by route, show latest per route
+  // Group by routeId – keep only the most recent per route
   const grouped = {};
-  buses.forEach(b => {
-    if (!grouped[b.routeId] || b.lastUpdate > grouped[b.routeId].lastUpdate) {
-      grouped[b.routeId] = b;
+  Object.values(activeBuses).forEach(bus => {
+    if (!bus.lat || !bus.lng || !bus.routeId) return;
+    if (!grouped[bus.routeId] || bus.lastUpdate > grouped[bus.routeId].lastUpdate) {
+      grouped[bus.routeId] = bus;
     }
   });
 
-  Object.values(grouped).forEach(bus => {
+  const uniqueBuses = Object.values(grouped);
+  updateBuses(grouped, routeData);
+  renderBusList(uniqueBuses);
+}
+
+function renderBusList(buses) {
+  if (!busList) return;
+  busList.innerHTML = '';
+  if (buses.length === 0) {
+    noBuses.style.display = 'block';
+    if (busCount) busCount.textContent = '';
+    return;
+  }
+  noBuses.style.display = 'none';
+  if (busCount) busCount.textContent = `(${buses.length})`;
+
+  buses.forEach(bus => {
     const li = document.createElement('li');
     const route = routeData.find(r => r.id === bus.routeId);
     const dir = bus.direction === 'forward' ? '🟦' : '🟧';
     const time = new Date(bus.lastUpdate).toLocaleTimeString();
-
     li.innerHTML = `
       <div class="bus-item">
         <span class="bus-number">${bus.routeId}</span>
@@ -641,10 +651,6 @@ function renderBusList(busesArray) {
 function setupConnection() {
   connectionStatus.textContent = 'Connecting...';
   connectionStatus.className = 'connection-badge';
-  checkFirebaseConnection();
-}
-
-function checkFirebaseConnection() {
   firebase.database().ref('/').once('value')
     .then(() => {
       connectionStatus.textContent = 'Online ✅';
@@ -660,7 +666,6 @@ function checkFirebaseConnection() {
 function showToast(message, type = 'info') {
   const existing = document.querySelector('.toast');
   if (existing) existing.remove();
-
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
   toast.innerHTML = message;
@@ -681,26 +686,14 @@ function showToast(message, type = 'info') {
     font-size: 0.9rem;
   `;
   document.body.appendChild(toast);
-
-  // Add animation style
   if (!document.getElementById('toastStyle')) {
     const style = document.createElement('style');
     style.id = 'toastStyle';
-    style.textContent = `
-      @keyframes fadeInUp {
-        from { opacity: 0; transform: translateX(-50%) translateY(20px); }
-        to { opacity: 1; transform: translateX(-50%) translateY(0); }
-      }
-    `;
+    style.textContent = `@keyframes fadeInUp { from { opacity:0; transform:translateX(-50%) translateY(20px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }`;
     document.head.appendChild(style);
   }
-
-  setTimeout(() => {
-    if (toast.parentNode) toast.remove();
-  }, 3000);
+  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 3000);
 }
-
-// Expose to global
 window.showToast = showToast;
 
 // ============ START ============
