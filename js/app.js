@@ -1,8 +1,10 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – ULTIMATE EDITION (Updated)
+// 🚌 TUNIS BUS LIVE – COMPLETE FINAL VERSION
+// Full-screen bus view | Auto-direction | Multi-language
+// Capacitor 4 + Background Geolocation
 // ============================================================
 
-import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap } from './map.js';
+import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap, focusOnBus } from './map.js';
 import { openDB, saveRoutes, getRoutes, saveTrip, getTrips, toggleFavorite, getFavorites } from './db.js';
 import { buildSearchIndex, search, getRoute } from './search.js';
 import { initPWA, isOnline, onOnline, onOffline } from './pwa.js';
@@ -32,8 +34,71 @@ let driverSpeed = 0;
 let driverLocation = null;
 let isTripActive = false;
 let cleanupTimer = null;
+let fullscreenBusActive = false;
+let currentLang = 'en';
 
 const isNative = window.Capacitor && Capacitor.isNative;
+
+// ============ TRANSLATIONS ============
+const translations = {
+  en: {
+    driver: 'Driver',
+    passenger: 'Passenger',
+    driverPanel: 'Driver Panel',
+    yourName: 'Your Name',
+    route: 'Route',
+    direction: 'Direction',
+    startTrip: 'Start Trip',
+    stopTrip: 'Stop Trip',
+    findBus: 'Find Your Bus',
+    activeBuses: 'Active Buses',
+    noBuses: 'No active buses right now.',
+    favorite: 'Favorite',
+    history: 'History',
+    routeDetails: 'Route Details',
+    close: 'Close',
+    tripHistory: 'Trip History',
+    appTitle: 'Tunis Bus Live'
+  },
+  fr: {
+    driver: 'Conducteur',
+    passenger: 'Passager',
+    driverPanel: 'Panneau Conducteur',
+    yourName: 'Votre Nom',
+    route: 'Itinéraire',
+    direction: 'Direction',
+    startTrip: 'Démarrer Trajet',
+    stopTrip: 'Arrêter Trajet',
+    findBus: 'Trouvez Votre Bus',
+    activeBuses: 'Bus Actifs',
+    noBuses: 'Aucun bus actif pour le moment.',
+    favorite: 'Favori',
+    history: 'Historique',
+    routeDetails: 'Détails de l\'itinéraire',
+    close: 'Fermer',
+    tripHistory: 'Historique des Trajets',
+    appTitle: 'Tunis Bus Live'
+  },
+  ar: {
+    driver: 'سائق',
+    passenger: 'راكب',
+    driverPanel: 'لوحة السائق',
+    yourName: 'اسمك',
+    route: 'المسار',
+    direction: 'الاتجاه',
+    startTrip: 'بدء الرحلة',
+    stopTrip: 'إنهاء الرحلة',
+    findBus: 'ابحث عن حافلتك',
+    activeBuses: 'الحافلات النشطة',
+    noBuses: 'لا توجد حافلات نشطة حالياً.',
+    favorite: 'المفضلة',
+    history: 'السجل',
+    routeDetails: 'تفاصيل المسار',
+    close: 'إغلاق',
+    tripHistory: 'سجل الرحلات',
+    appTitle: 'تونس باص لايف'
+  }
+};
 
 // ============ DOM REFS ============
 const $ = (id) => document.getElementById(id);
@@ -63,17 +128,66 @@ const historyPanel = $('historyPanel');
 const historyList = $('historyList');
 const btnCloseHistory = $('btnCloseHistory');
 const busCount = $('busCount');
+const langSwitcher = $('langSwitcher');
 
-// Full Route Panel
-const fullRoutePanel = $('fullRoutePanel');
-const fullRouteContent = $('fullRouteContent');
-const fullRouteTitle = $('fullRouteTitle');
-const closeFullRoute = $('closeFullRoute');
+// Full Screen Bus View
+const fullscreenOverlay = $('fullscreenBusView');
+const fullscreenMapContainer = $('fullscreenMapContainer');
+const fsBusTitle = $('fsBusTitle');
+const fsBusRoute = $('fsBusRoute');
+const fsBusDriver = $('fsBusDriver');
+const fsBusStops = $('fsBusStops');
+const closeFullscreenBtn = $('closeFullscreenBus');
+
+// ============ LANGUAGE FUNCTIONS ============
+function setLanguage(lang) {
+  currentLang = lang;
+  const t = translations[lang];
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (t[key]) el.textContent = t[key];
+  });
+  const titleEl = document.getElementById('appTitle');
+  if (titleEl && t.appTitle) titleEl.textContent = t.appTitle;
+  localStorage.setItem('lang', lang);
+}
+
+function loadLanguage() {
+  const saved = localStorage.getItem('lang') || 'en';
+  if (langSwitcher) langSwitcher.value = saved;
+  setLanguage(saved);
+}
+
+// ============ HELPER FUNCTIONS ============
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getCurrentPosition() {
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      timeout: 10000
+    });
+  });
+}
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v6.0 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
+  console.log(`🚌 Tunis Bus Live v7.0 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
   initPWA();
+  loadLanguage();
+
+  if (langSwitcher) {
+    langSwitcher.addEventListener('change', function() {
+      setLanguage(this.value);
+    });
+  }
+
   await loadRoutes();
   setupTabs();
   setupDriverUI();
@@ -109,6 +223,12 @@ async function init() {
       { timeout: 5000, enableHighAccuracy: false }
     );
   }
+
+  // Full-screen close button
+  if (closeFullscreenBtn) {
+    closeFullscreenBtn.addEventListener('click', closeFullscreenBus);
+  }
+
   console.log('✅ App ready');
 }
 
@@ -146,7 +266,7 @@ async function loadRoutes() {
 
 function populateRouteSelects() {
   if (!routeSelect) return;
-  routeSelect.innerHTML = '<option value="">-- Choose Route --</option>';
+  routeSelect.innerHTML = '<option value="">-- Choose --</option>';
   routeData.forEach(route => {
     const opt = document.createElement('option');
     opt.value = route.id;
@@ -247,7 +367,7 @@ async function startTripConfirmed(routeId, direction) {
           return;
         }
       }
-    } catch(e) {}
+    } catch (e) {}
   }
 
   const driver = driverNameInput.value.trim() || 'Anonymous';
@@ -265,7 +385,7 @@ async function startTripConfirmed(routeId, direction) {
 
   try {
     await firebase.database().ref(`activeBuses/${currentTripId}`).set(tripData);
-  } catch(e) {
+  } catch (e) {
     console.error('Firebase error:', e);
     showToast('Could not start trip. Check connection.', 'error');
     return;
@@ -273,7 +393,6 @@ async function startTripConfirmed(routeId, direction) {
 
   isTripActive = true;
 
-  // Native background or web geolocation
   if (isNative) {
     try {
       const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
@@ -358,7 +477,7 @@ function stopTrip() {
       import('@capacitor-community/background-geolocation').then(module => {
         module.BackgroundGeolocation.removeWatcher({ id: bgWatcherId });
       }).catch(() => {});
-    } catch(e) {}
+    } catch (e) {}
     bgWatcherId = null;
   }
   if (watchId) {
@@ -400,7 +519,9 @@ function checkAutoEnd() {
 
 // ============ AUTO‑DETECT ROUTE ============
 function autoDetectRoute(lat, lng) {
-  let best = null, bestDist = Infinity, bestDir = 'forward';
+  let best = null,
+    bestDist = Infinity,
+    bestDir = 'forward';
   routeData.forEach(route => {
     route.stops.forEach((stop, idx) => {
       const d = haversineDistance(lat, lng, stop.lat, stop.lng);
@@ -419,27 +540,9 @@ function isNearRoute(route, lat, lng) {
   return route.stops.some(s => haversineDistance(lat, lng, s.lat, s.lng) <= 0.5);
 }
 
-function haversineDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-}
-
-function getCurrentPosition() {
-  return new Promise((resolve, reject) => {
-    navigator.geolocation.getCurrentPosition(resolve, reject, {
-      enableHighAccuracy: true,
-      timeout: 10000
-    });
-  });
-}
-
 // ============ PASSENGER UI ============
 function setupPassengerUI() {
   btnCloseDetail.addEventListener('click', () => routeDetailPanel.classList.add('hidden'));
-  closeFullRoute.addEventListener('click', () => fullRoutePanel.classList.add('hidden'));
 
   const refreshBtn = document.createElement('button');
   refreshBtn.className = 'btn btn-secondary';
@@ -576,7 +679,7 @@ function showRouteDetail(routeId) {
     <div style="margin-top:8px;max-height:200px;overflow-y:auto;">
       ${route.stops.map(s => `<div class="stop-item"><i class="fas fa-circle" style="font-size:8px;color:#3498db;"></i> ${s.name}</div>`).join('')}
     </div>
-    <div style="margin-top:10px;display:flex;gap:10px;">
+    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">
       <button class="btn btn-primary" style="width:auto;padding:8px 16px;" onclick="window.showOnMap('${routeId}')">
         <i class="fas fa-map"></i> Show on map
       </button>
@@ -618,23 +721,45 @@ function showStopDetail(lat, lng, name) {
   routeDetailPanel.classList.remove('hidden');
 }
 
-// ============ FULL ROUTE VIEW ============
-function showFullRoute(routeId, busData = null) {
+// ============ FULL SCREEN BUS VIEW ============
+function openFullscreenBus(routeId, bus) {
   const route = routeData.find(r => r.id === routeId);
   if (!route) return;
-  fullRouteTitle.textContent = `${route.id} - ${route.name}`;
 
+  fsBusTitle.textContent = `Bus ${routeId}`;
+  const directionText = bus && bus.direction === 'forward' ? 'Aller ↑' : (bus && bus.direction === 'backward' ? 'Retour ↓' : '—');
+  fsBusRoute.textContent = `${route.name} – ${directionText}`;
+  fsBusDriver.textContent = `Driver: ${bus && bus.driverName || 'Unknown'}`;
+
+  fullscreenOverlay.classList.remove('hidden');
+  fullscreenBusActive = true;
+
+  // Move map to fullscreen container
+  const mapElement = document.getElementById('map');
+  const originalParent = mapElement.parentNode;
+  fullscreenMapContainer.appendChild(mapElement);
+  mapElement._originalParent = originalParent;
+
+  const mapInstance = getMap();
+  if (mapInstance) {
+    setTimeout(() => {
+      mapInstance.invalidateSize();
+      focusOnBus(routeId, bus, routeData);
+    }, 100);
+  }
+
+  // Build stops list with ETA
   const allerSet = new Set(route.aller.map(s => `${s.lat},${s.lng}`));
   const retourSet = new Set(route.retour.map(s => `${s.lat},${s.lng}`));
-  const busPos = busData ? { lat: busData.lat, lng: busData.lng } : null;
+  const busPos = bus ? { lat: bus.lat, lng: bus.lng } : null;
 
   let html = '';
   route.stops.forEach((stop, idx) => {
     const key = `${stop.lat},${stop.lng}`;
     let dir = '';
-    if (allerSet.has(key) && retourSet.has(key)) dir = '↕ Both';
-    else if (allerSet.has(key)) dir = '↑ Aller';
-    else if (retourSet.has(key)) dir = '↓ Retour';
+    if (allerSet.has(key) && retourSet.has(key)) dir = '↕';
+    else if (allerSet.has(key)) dir = '↑';
+    else if (retourSet.has(key)) dir = '↓';
 
     let eta = '';
     let isBusHere = false;
@@ -643,31 +768,48 @@ function showFullRoute(routeId, busData = null) {
       if (dist < 0.5) {
         eta = '📍 Bus here';
         isBusHere = true;
-      } else if (busData.speed && busData.speed > 0.5) {
-        const timeSec = (dist / busData.speed) * 3600;
+      } else if (bus.speed && bus.speed > 0.5) {
+        const timeSec = (dist / bus.speed) * 3600;
         if (timeSec < 60) eta = '~' + Math.round(timeSec) + 's';
-        else if (timeSec < 3600) eta = '~' + Math.round(timeSec/60) + 'm';
+        else if (timeSec < 3600) eta = '~' + Math.round(timeSec / 60) + 'm';
         else eta = '>1h';
       }
     }
 
     html += `
-      <div class="route-stop-item ${isBusHere ? 'bus-here' : ''}">
-        <span class="stop-index">#${idx+1}</span>
-        <span class="stop-name">${stop.name}</span>
-        <span class="stop-direction">${dir}</span>
-        ${eta ? `<span class="stop-eta">${eta}</span>` : ''}
-        ${isBusHere ? `<span class="stop-bus-here">🚌</span>` : ''}
+      <div class="fs-stop-item ${isBusHere ? 'bus-here' : ''}">
+        <span class="fs-stop-index">#${idx + 1}</span>
+        <span class="fs-stop-name">${stop.name}</span>
+        ${dir ? `<span style="font-size:0.7rem;color:#666;">${dir}</span>` : ''}
+        ${eta ? `<span class="fs-stop-eta">${eta}</span>` : ''}
+        ${isBusHere ? `<span class="fs-stop-bus-here">🚌</span>` : ''}
       </div>
     `;
   });
-  fullRouteContent.innerHTML = html;
-  fullRoutePanel.classList.remove('hidden');
+  fsBusStops.innerHTML = html;
+}
+
+function closeFullscreenBus() {
+  fullscreenOverlay.classList.add('hidden');
+  fullscreenBusActive = false;
+
+  const mapElement = document.getElementById('map');
+  if (mapElement._originalParent) {
+    mapElement._originalParent.appendChild(mapElement);
+    const mapInstance = getMap();
+    if (mapInstance) {
+      setTimeout(() => mapInstance.invalidateSize(), 50);
+    }
+  }
+  // Reload active buses
+  updateBusUI();
 }
 
 // Expose to global
-window.showFullRoute = showFullRoute;
+window.openFullscreenBus = openFullscreenBus;
+window.closeFullscreenBus = closeFullscreenBus;
 window.focusStop = focusStop;
+window.showFullRoute = showFullRoute;
 
 // ============ LIVE BUSES ============
 function listenToActiveBuses() {
@@ -726,15 +868,33 @@ function updateBusUI() {
     if (now - bus.lastUpdate > REMOVE_THRESHOLD) return false;
     return true;
   });
+
+  // Auto-detect direction for buses without direction
   validBuses.forEach(bus => {
+    const route = routeData.find(r => r.id === bus.routeId);
+    if (route && (!bus.direction || bus.direction === 'unknown')) {
+      const firstStop = route.stops[0];
+      const lastStop = route.stops[route.stops.length - 1];
+      if (firstStop && lastStop) {
+        const distToFirst = haversineDistance(bus.lat, bus.lng, firstStop.lat, firstStop.lng);
+        const distToLast = haversineDistance(bus.lat, bus.lng, lastStop.lat, lastStop.lng);
+        const detectedDir = distToFirst < distToLast ? 'forward' : 'backward';
+        if (bus.direction !== detectedDir) {
+          bus.direction = detectedDir;
+          firebase.database().ref(`activeBuses/${bus.tripId}/direction`).set(detectedDir).catch(() => {});
+        }
+      }
+    }
     bus.isEstimated = (now - bus.lastUpdate > STALE_THRESHOLD);
   });
+
   const grouped = {};
   validBuses.forEach(bus => {
     if (!grouped[bus.routeId] || bus.lastUpdate > grouped[bus.routeId].lastUpdate) {
       grouped[bus.routeId] = bus;
     }
   });
+
   updateBuses(grouped, routeData);
   renderBusList(Object.values(grouped));
 }
@@ -770,10 +930,7 @@ function renderBusList(buses) {
     li.addEventListener('click', () => {
       if (route) {
         selectedRouteId = bus.routeId;
-        showRoute(bus.routeId, routeData);
-        updateFavoriteButton();
-        showFullRoute(bus.routeId, bus);
-        showRouteDetail(bus.routeId);
+        openFullscreenBus(bus.routeId, bus);
       }
     });
     li.querySelector('.report-btn').addEventListener('click', async (e) => {
@@ -831,12 +988,23 @@ function showToast(message, type = 'info') {
   if (!document.getElementById('toastStyle')) {
     const style = document.createElement('style');
     style.id = 'toastStyle';
-    style.textContent = `@keyframes fadeInUp { from { opacity:0; transform:translateX(-50%) translateY(20px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }`;
+    style.textContent =
+      `@keyframes fadeInUp { from { opacity:0; transform:translateX(-50%) translateY(20px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }`;
     document.head.appendChild(style);
   }
   setTimeout(() => { if (toast.parentNode) toast.remove(); }, 3000);
 }
 window.showToast = showToast;
+
+// ============ FULL ROUTE VIEW (legacy) ============
+function showFullRoute(routeId, busData) {
+  // This is kept for compatibility; the full-screen bus view is now used.
+  // But we'll keep it for the detail panel.
+  const route = routeData.find(r => r.id === routeId);
+  if (!route) return;
+  // If called from the detail panel, open fullscreen instead
+  openFullscreenBus(routeId, busData);
+}
 
 // ============ START ============
 document.addEventListener('DOMContentLoaded', init);
