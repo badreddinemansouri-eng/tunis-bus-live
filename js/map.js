@@ -1,4 +1,4 @@
-// ============ MAP.JS – SMART & SMOOTH ============
+// ============ MAP.JS – WITH DEAD RECKONING ============
 
 import { getRoutes } from './db.js';
 
@@ -20,7 +20,6 @@ export function initMap(containerId, center = [36.8065, 10.1815], zoom = 12) {
   L.control.scale({ metric: true, imperial: false }).addTo(map);
   routeLayer = L.layerGroup().addTo(map);
   addLegend();
-  // Start animation loop for smooth movement
   if (!animationFrame) {
     animationFrame = requestAnimationFrame(smoothMove);
   }
@@ -35,7 +34,8 @@ function addLegend() {
         <strong>Legend</strong>
         <div><span style="color:#2196F3;">●</span> Aller</div>
         <div><span style="color:#FF9800;">●</span> Retour</div>
-        <div><span style="color:#4CAF50;">●</span> Active Bus</div>
+        <div><span style="color:#4CAF50;">●</span> Live Bus</div>
+        <div><span style="color:#FFD700;">●</span> Estimated Bus</div>
         <div><span style="font-size:0.7rem;">⬤</span> Stop</div>
       `;
       return div;
@@ -59,18 +59,15 @@ export function showRoute(routeId, routes) {
   if (!routeLayer) return;
   routeLayer.clearLayers();
 
-  // Aller (blue)
   if (route.aller && route.aller.length > 1) {
     const coords = route.aller.map(s => [s.lat, s.lng]);
     L.polyline(coords, { color: '#2196F3', weight: 5, opacity: 0.9 }).addTo(routeLayer);
   }
-  // Retour (orange, dashed)
   if (route.retour && route.retour.length > 1) {
     const coords = route.retour.map(s => [s.lat, s.lng]);
     L.polyline(coords, { color: '#FF9800', weight: 5, opacity: 0.9, dashArray: '8, 6' }).addTo(routeLayer);
   }
 
-  // Stops
   const stopSet = new Map();
   route.stops.forEach(stop => {
     const key = `${stop.lat},${stop.lng}`;
@@ -98,11 +95,11 @@ export function showRoute(routeId, routes) {
 }
 
 export function updateBuses(buses, routes) {
-  // buses is an object grouped by routeId (only the most recent per route)
+  // buses is an object grouped by routeId
   activeBuses = buses;
   const now = Date.now();
 
-  // Remove markers for routes that no longer have a bus
+  // Remove markers for routes no longer present
   const activeRouteIds = Object.keys(buses);
   for (let key in busMarkers) {
     if (!activeRouteIds.includes(key)) {
@@ -118,14 +115,49 @@ export function updateBuses(buses, routes) {
     if (!route) return;
 
     const isAller = bus.direction === 'forward';
-    const color = isAller ? '#4CAF50' : '#FF6B6B';
+    const isEstimated = bus.isEstimated || false;
+    const color = isEstimated ? '#FFD700' : (isAller ? '#4CAF50' : '#FF6B6B');
     const dirArrow = isAller ? '↑' : '↓';
+    const label = isEstimated ? `${bus.routeId}*` : bus.routeId;
 
-    // Store previous position and time for smoothing
+    // ----- Dead Reckoning (if estimated and moving) -----
+    if (isEstimated && bus.speed && bus.speed > 0.5 && route) {
+      const elapsedSeconds = (now - bus.lastUpdate) / 1000;
+      const distance = bus.speed * elapsedSeconds; // meters
+      const stops = (bus.direction === 'forward') ? route.aller : route.retour;
+      if (stops && stops.length > 0) {
+        let nearestIdx = 0;
+        let minDist = Infinity;
+        stops.forEach((s, idx) => {
+          const d = haversineDistance(bus.lat, bus.lng, s.lat, s.lng);
+          if (d < minDist) {
+            minDist = d;
+            nearestIdx = idx;
+          }
+        });
+        let accumulated = 0;
+        let targetLat = bus.lat, targetLng = bus.lng;
+        for (let i = nearestIdx; i < stops.length - 1; i++) {
+          const segDist = haversineDistance(stops[i].lat, stops[i].lng, stops[i+1].lat, stops[i+1].lng);
+          if (accumulated + segDist >= distance/1000) {
+            const ratio = (distance/1000 - accumulated) / segDist;
+            targetLat = stops[i].lat + (stops[i+1].lat - stops[i].lat) * ratio;
+            targetLng = stops[i].lng + (stops[i+1].lng - stops[i].lng) * ratio;
+            break;
+          }
+          accumulated += segDist;
+        }
+        bus._targetLat = targetLat;
+        bus._targetLng = targetLng;
+        bus.lat = targetLat;
+        bus.lng = targetLng;
+      }
+    }
+
+    // Store target for smooth animation
     if (!lastUpdateTime[routeId]) {
       lastUpdateTime[routeId] = { lat: bus.lat, lng: bus.lng, time: now };
     } else {
-      // Update only if new data is fresh
       if (bus.lastUpdate > lastUpdateTime[routeId].time) {
         lastUpdateTime[routeId] = { lat: bus.lat, lng: bus.lng, time: now };
       }
@@ -135,7 +167,7 @@ export function updateBuses(buses, routes) {
       className: 'bus-marker',
       html: `
         <div class="bus-icon" style="background:${color};color:#fff;">
-          ${bus.routeId}
+          ${label}
           <span style="font-size:10px;display:block;">${dirArrow}</span>
         </div>
       `,
@@ -143,13 +175,17 @@ export function updateBuses(buses, routes) {
       iconAnchor: [20, 20]
     });
 
+    const isStale = (now - bus.lastUpdate > 120000);
+    const statusText = isStale ? '⚠️ Stale – last seen ' + new Date(bus.lastUpdate).toLocaleTimeString() : '🟢 Live';
     const popupContent = `
-      <b>Bus ${bus.routeId}</b><br>
+      <b>Bus ${bus.routeId}</b>
+      ${isEstimated ? '⚠️ Estimated position' : ''}<br>
+      ${statusText}<br>
       ${route.name}<br>
       ${isAller ? '🟦 Aller' : '🟧 Retour'}<br>
       Driver: ${bus.driverName || 'Unknown'}<br>
-      Updated: ${new Date(bus.lastUpdate).toLocaleTimeString()}<br>
       ${bus.speed ? `Speed: ${(bus.speed * 3.6).toFixed(1)} km/h` : ''}
+      ${isStale ? '<br><button id="reportBtn" style="background:#f5a623;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;">📍 I see this bus</button>' : ''}
     `;
 
     if (!busMarkers[routeId]) {
@@ -157,17 +193,31 @@ export function updateBuses(buses, routes) {
         .addTo(map)
         .bindPopup(popupContent);
     } else {
-      // The marker exists; we'll update its position in the animation loop
-      // Just store the target position
       busMarkers[routeId]._targetLat = bus.lat;
       busMarkers[routeId]._targetLng = bus.lng;
-      // Update popup if needed
       busMarkers[routeId].setPopupContent(popupContent);
     }
+
+    // Attach report button listener after popup opens
+    busMarkers[routeId].on('popupopen', function() {
+      setTimeout(() => {
+        const btn = document.getElementById('reportBtn');
+        if (btn) {
+          btn.addEventListener('click', function() {
+            firebase.database().ref(`activeBuses/${bus.tripId}`).update({
+              lastUpdate: firebase.database.ServerValue.TIMESTAMP,
+              reportedBy: 'passenger'
+            });
+            showToast('✅ Bus position confirmed!', 'success');
+            busMarkers[routeId].closePopup();
+          });
+        }
+      }, 100);
+    });
   });
 }
 
-// Smooth movement animation loop
+// Smooth animation loop
 function smoothMove() {
   if (!map) { animationFrame = requestAnimationFrame(smoothMove); return; }
   const now = Date.now();
@@ -176,19 +226,15 @@ function smoothMove() {
     const marker = busMarkers[routeId];
     if (!marker._targetLat || !marker._targetLng) continue;
 
-    // Calculate current position by interpolating towards target
     const currentLat = marker.getLatLng().lat;
     const currentLng = marker.getLatLng().lng;
     const dLat = marker._targetLat - currentLat;
     const dLng = marker._targetLng - currentLng;
 
-    // If far, snap; else smooth
     const dist = Math.sqrt(dLat*dLat + dLng*dLng);
     if (dist < 0.0001) {
-      // Snap if very close
       marker.setLatLng([marker._targetLat, marker._targetLng]);
     } else {
-      // Move towards target with a smoothing factor (0.15 per frame ~ 15% per frame)
       const factor = 0.15;
       const newLat = currentLat + dLat * factor;
       const newLng = currentLng + dLng * factor;
@@ -198,6 +244,20 @@ function smoothMove() {
 
   animationFrame = requestAnimationFrame(smoothMove);
 }
+
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// Re‑export showToast from global (app.js sets window.showToast)
+const showToast = (msg, type) => {
+  if (window.showToast) window.showToast(msg, type);
+  else console.log(msg);
+};
 
 export function focusStop(lat, lng, name) {
   if (!map) return;
