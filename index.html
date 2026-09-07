@@ -12,17 +12,17 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="css/style.css?v=9">
+  <link rel="stylesheet" href="css/style.css?v=11">
   <script src="https://unpkg.com/@capacitor/core@latest/dist/capacitor.js"></script>
 </head>
 <body>
   <div id="app">
     <header>
       <div class="header-top">
-        <h1>
-          <img src="icons/icon-192.png" alt="Logo" style="height:32px;width:32px;border-radius:8px;vertical-align:middle;margin-right:8px;">
-          <span id="appTitle">Tunis Bus Live</span>
-        </h1>
+        <div style="display:flex;align-items:center;gap:12px;flex:1;">
+          <img src="icons/icon-512.png" alt="Tunis Bus Live" style="height:45px;width:auto;border-radius:8px;">
+          <span id="appTitle" style="font-size:1.2rem;font-weight:800;color:white;">Tunis Bus Live</span>
+        </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <button id="adminToggle" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;color:white;font-size:0.7rem;cursor:pointer;">🔒 Admin</button>
           <select id="langSwitcher" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;font-size:0.8rem;">
@@ -177,9 +177,9 @@
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
-  <script src="js/firebase-config.js?v=9"></script>
-  <script src="js/routes.js?v=9"></script>
-  <script type="module" src="js/app.js?v=9"></script>
+  <script src="js/firebase-config.js?v=11"></script>
+  <script src="js/routes.js?v=11"></script>
+  <script type="module" src="js/app.js?v=11"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
