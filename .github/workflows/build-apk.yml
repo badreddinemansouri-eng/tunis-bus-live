@@ -20,6 +20,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Install Capacitor Assets plugin
+        run: npm install @capacitor/assets --save-dev
+
+      - name: Generate Android assets (icons & splash)
+        run: npx capacitor-assets generate --assetPath ./icons --android
+
       - name: Prepare www folder
         run: |
           mkdir -p www
