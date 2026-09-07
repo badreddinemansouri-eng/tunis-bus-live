@@ -28,25 +28,48 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
-      # ----- MANUAL ICON COPY (GUARANTEED) -----
+      # ----- FULL ICON OVERRIDE -----
+      - name: Remove old Android icons
+        run: |
+          rm -rf android/app/src/main/res/mipmap-*
+          rm -rf android/app/src/main/res/drawable-*
+
       - name: Copy custom icon to all Android densities
         run: |
+          # Create all density folders
           mkdir -p android/app/src/main/res/mipmap-mdpi
           mkdir -p android/app/src/main/res/mipmap-hdpi
           mkdir -p android/app/src/main/res/mipmap-xhdpi
           mkdir -p android/app/src/main/res/mipmap-xxhdpi
           mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+          mkdir -p android/app/src/main/res/mipmap-anydpi-v26
+
+          # Copy icon to all densities (use the same 512px icon – Android will downscale)
           cp icons/icon-512.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png
           cp icons/icon-512.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png
           cp icons/icon-512.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
           cp icons/icon-512.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-          # Also copy for round icon (if needed)
+
+          # Copy same for round icon
           cp icons/icon-512.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
           cp icons/icon-512.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
           cp icons/icon-512.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
           cp icons/icon-512.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
           cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+
+      - name: Create adaptive icon XML (Android 8+)
+        run: |
+          echo '<?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background"/>
+              <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+          </adaptive-icon>' > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          echo '<?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background"/>
+              <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+          </adaptive-icon>' > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
       # ------------------------------------------
 
       - name: Sync Capacitor
