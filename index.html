@@ -12,25 +12,24 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="css/style.css?v=11">
+  <link rel="stylesheet" href="css/style.css?v=12">
   <script src="https://unpkg.com/@capacitor/core@latest/dist/capacitor.js"></script>
 </head>
 <body>
   <div id="app">
-    <header>
+    <header style="background-image: url('icons/icon-512.png'); background-size: cover; background-position: center; background-color: #0d2b45; background-blend-mode: overlay;">
       <div class="header-top">
         <div style="display:flex;align-items:center;gap:12px;flex:1;">
-          <img src="icons/icon-512.png" alt="Tunis Bus Live" style="height:45px;width:auto;border-radius:8px;">
-          <span id="appTitle" style="font-size:1.2rem;font-weight:800;color:white;">Tunis Bus Live</span>
+          <span id="appTitle" style="font-size:1.2rem;font-weight:800;color:white;text-shadow:0 2px 8px rgba(0,0,0,0.8);">Tunis Bus Live</span>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <button id="adminToggle" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;color:white;font-size:0.7rem;cursor:pointer;">🔒 Admin</button>
-          <select id="langSwitcher" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;font-size:0.8rem;">
+          <button id="adminToggle" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;color:white;font-size:0.7rem;cursor:pointer;backdrop-filter:blur(4px);">🔒 Admin</button>
+          <select id="langSwitcher" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;font-size:0.8rem;backdrop-filter:blur(4px);">
             <option value="en">EN</option>
             <option value="fr">FR</option>
             <option value="ar">عربي</option>
           </select>
-          <span id="connectionStatus" class="connection-badge">Connecting...</span>
+          <span id="connectionStatus" class="connection-badge" style="backdrop-filter:blur(4px);">Connecting...</span>
         </div>
       </div>
       <nav class="tabs">
@@ -177,9 +176,9 @@
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
-  <script src="js/firebase-config.js?v=11"></script>
-  <script src="js/routes.js?v=11"></script>
-  <script type="module" src="js/app.js?v=11"></script>
+  <script src="js/firebase-config.js?v=12"></script>
+  <script src="js/routes.js?v=12"></script>
+  <script type="module" src="js/app.js?v=12"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
