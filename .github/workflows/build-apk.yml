@@ -20,12 +20,6 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Install Capacitor Assets plugin
-        run: npm install @capacitor/assets --save-dev
-
-      - name: Generate Android assets (icons & splash)
-        run: npx capacitor-assets generate --assetPath ./icons --android
-
       - name: Prepare www folder
         run: |
           mkdir -p www
@@ -33,6 +27,27 @@ jobs:
 
       - name: Add Android platform
         run: npx cap add android
+
+      # ----- MANUAL ICON COPY (GUARANTEED) -----
+      - name: Copy custom icon to all Android densities
+        run: |
+          mkdir -p android/app/src/main/res/mipmap-mdpi
+          mkdir -p android/app/src/main/res/mipmap-hdpi
+          mkdir -p android/app/src/main/res/mipmap-xhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+          cp icons/icon-512.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          cp icons/icon-512.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          cp icons/icon-512.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          cp icons/icon-512.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          # Also copy for round icon (if needed)
+          cp icons/icon-512.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+          cp icons/icon-512.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+          cp icons/icon-512.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+          cp icons/icon-512.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+          cp icons/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+      # ------------------------------------------
 
       - name: Sync Capacitor
         run: npx cap sync android
