@@ -2,6 +2,7 @@
 // 🚌 TUNIS BUS LIVE – COMPLETE FINAL VERSION
 // Full-screen bus view | Auto-direction | Multi-language
 // Admin Dashboard | Feedback | Error Logging
+// Nearby Stops | Plan My Trip
 // Capacitor 4 + Background Geolocation
 // ============================================================
 
@@ -38,6 +39,7 @@ let cleanupTimer = null;
 let fullscreenBusActive = false;
 let currentLang = 'en';
 let adminInterval = null;
+let userLocationForTrip = null;
 
 const isNative = window.Capacitor && Capacitor.isNative;
 
@@ -147,6 +149,16 @@ const feedbackModal = $('feedbackModal');
 const closeFeedback = $('closeFeedback');
 const submitFeedback = $('submitFeedback');
 const feedbackText = $('feedbackText');
+const nearbyBtn = $('nearbyBtn');
+const nearbyModal = $('nearbyModal');
+const nearbyResults = $('nearbyResults');
+const closeNearby = $('closeNearby');
+const planTripBtn = $('planTripBtn');
+const planTripModal = $('planTripModal');
+const destinationInput = $('destinationInput');
+const searchTripBtn = $('searchTripBtn');
+const tripResults = $('tripResults');
+const closePlanTrip = $('closePlanTrip');
 
 // Full Screen Bus View
 const fullscreenOverlay = $('fullscreenBusView');
@@ -269,6 +281,216 @@ async function submitFeedbackHandler() {
   }
 }
 
+// ============ NEARBY STOPS ============
+async function findNearbyStops() {
+  if (!navigator.geolocation) {
+    showToast('Geolocation not supported', 'error');
+    return;
+  }
+  showToast('Getting your location...', 'info');
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      const results = getClosestStops(lat, lng, 8);
+      displayNearbyResults(results);
+    },
+    (err) => {
+      showToast('Could not get location. Please enable GPS.', 'error');
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
+
+function getClosestStops(userLat, userLng, limit = 8) {
+  const stopMap = new Map();
+  routeData.forEach(route => {
+    route.stops.forEach(stop => {
+      const key = `${stop.lat},${stop.lng}`;
+      if (!stopMap.has(key)) {
+        stopMap.set(key, {
+          name: stop.name,
+          lat: stop.lat,
+          lng: stop.lng,
+          routes: new Set()
+        });
+      }
+      stopMap.get(key).routes.add(route.id);
+    });
+  });
+  const stops = Array.from(stopMap.values()).map(stop => {
+    const dist = haversineDistance(userLat, userLng, stop.lat, stop.lng);
+    return { ...stop, distance: dist };
+  });
+  stops.sort((a, b) => a.distance - b.distance);
+  return stops.slice(0, limit);
+}
+
+function displayNearbyResults(stops) {
+  if (!stops || stops.length === 0) {
+    nearbyResults.innerHTML = '<p style="text-align:center;color:#999;">No stops found nearby.</p>';
+  } else {
+    let html = '';
+    stops.forEach(stop => {
+      const routeList = Array.from(stop.routes).join(', ');
+      const distText = stop.distance < 1 ? `${Math.round(stop.distance * 1000)} m` : `${stop.distance.toFixed(1)} km`;
+      html += `
+        <div class="nearby-stop-item" data-lat="${stop.lat}" data-lng="${stop.lng}" data-name="${stop.name}" style="padding:10px;border-bottom:1px solid #eee;cursor:pointer;">
+          <div style="font-weight:bold;">${stop.name}</div>
+          <div style="font-size:0.85rem;color:#666;">${distText} · Routes: ${routeList}</div>
+        </div>
+      `;
+    });
+    nearbyResults.innerHTML = html;
+    nearbyResults.querySelectorAll('.nearby-stop-item').forEach(el => {
+      el.addEventListener('click', function() {
+        const lat = parseFloat(this.dataset.lat);
+        const lng = parseFloat(this.dataset.lng);
+        const name = this.dataset.name;
+        focusStop(lat, lng, name);
+        nearbyModal.classList.add('hidden');
+      });
+    });
+  }
+  nearbyModal.classList.remove('hidden');
+}
+
+// ============ PLAN MY TRIP ============
+function openPlanTrip() {
+  planTripModal.classList.remove('hidden');
+  tripResults.innerHTML = '';
+  destinationInput.value = '';
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        userLocationForTrip = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        showToast('📍 Location detected! Enter your destination.', 'success');
+      },
+      err => {
+        showToast('Could not get location. Please enter your starting stop manually.', 'warning');
+        userLocationForTrip = null;
+      }
+    );
+  }
+}
+
+async function planTrip() {
+  const destQuery = destinationInput.value.trim();
+  if (!destQuery) {
+    showToast('Please enter a destination.', 'warning');
+    return;
+  }
+
+  // Build stop index
+  const stopMap = new Map();
+  routeData.forEach(route => {
+    route.stops.forEach(stop => {
+      const key = `${stop.lat},${stop.lng}`;
+      if (!stopMap.has(key)) {
+        stopMap.set(key, {
+          name: stop.name,
+          lat: stop.lat,
+          lng: stop.lng,
+          routes: new Set()
+        });
+      }
+      stopMap.get(key).routes.add(route.id);
+    });
+  });
+  const uniqueStops = Array.from(stopMap.values());
+
+  // Find destination stops
+  const matchedStops = uniqueStops.filter(s => 
+    s.name.toLowerCase().includes(destQuery.toLowerCase())
+  );
+
+  if (matchedStops.length === 0) {
+    tripResults.innerHTML = `
+      <p style="color:red;">❌ No stops found matching "${destQuery}". Try another name or check the spelling.</p>
+    `;
+    return;
+  }
+
+  // Find user's nearest stop
+  let userStop = null;
+  if (userLocationForTrip) {
+    let minDist = Infinity;
+    uniqueStops.forEach(stop => {
+      const d = haversineDistance(userLocationForTrip.lat, userLocationForTrip.lng, stop.lat, stop.lng);
+      if (d < minDist) {
+        minDist = d;
+        userStop = stop;
+      }
+    });
+  } else {
+    // Fallback: manual stop selection
+    tripResults.innerHTML = `
+      <p style="color:orange;">⚠️ Could not detect your location. Please select your current stop:</p>
+      <div style="max-height:150px;overflow-y:auto;margin-top:5px;">
+        ${uniqueStops.slice(0, 20).map(s => 
+          `<div class="stop-select-item" data-lat="${s.lat}" data-lng="${s.lng}" data-name="${s.name}" style="padding:6px;border-bottom:1px solid #eee;cursor:pointer;">${s.name}</div>`
+        ).join('')}
+      </div>
+    `;
+    tripResults.querySelectorAll('.stop-select-item').forEach(el => {
+      el.addEventListener('click', function() {
+        const lat = parseFloat(this.dataset.lat);
+        const lng = parseFloat(this.dataset.lng);
+        const name = this.dataset.name;
+        const stop = uniqueStops.find(s => s.lat === lat && s.lng === lng);
+        if (stop) {
+          findConnectingRoutes(stop, matchedStops[0]);
+        }
+      });
+    });
+    return;
+  }
+
+  findConnectingRoutes(userStop, matchedStops[0]);
+}
+
+function findConnectingRoutes(fromStop, toStop) {
+  const commonRoutes = [...fromStop.routes].filter(r => toStop.routes.has(r));
+
+  if (commonRoutes.length === 0) {
+    tripResults.innerHTML = `
+      <div style="background:#fff3cd;padding:10px;border-radius:8px;">
+        <p>❌ No direct bus line connects <strong>${fromStop.name}</strong> and <strong>${toStop.name}</strong>.</p>
+        <p style="font-size:0.85rem;color:#666;">Try using a different destination or consider changing buses.</p>
+        <p style="font-size:0.85rem;color:#666;">Routes at ${fromStop.name}: ${[...fromStop.routes].join(', ')}</p>
+        <p style="font-size:0.85rem;color:#666;">Routes at ${toStop.name}: ${[...toStop.routes].join(', ')}</p>
+      </div>
+    `;
+    return;
+  }
+
+  let html = `<div style="background:#d4edda;padding:10px;border-radius:8px;margin-bottom:8px;">
+    <p>✅ <strong>${commonRoutes.length}</strong> direct bus line(s) connect your stop to your destination!</p>
+  </div>`;
+
+  commonRoutes.forEach(routeId => {
+    const route = routeData.find(r => r.id === routeId);
+    if (!route) return;
+    html += `
+      <div style="border:1px solid #ddd;border-radius:8px;padding:10px;margin-bottom:8px;cursor:pointer;" onclick="window.showRoute('${routeId}', routeData); planTripModal.classList.add('hidden');">
+        <div style="font-weight:bold;">🚌 Route ${routeId}</div>
+        <div style="font-size:0.85rem;color:#666;">${route.name}</div>
+        <div style="font-size:0.8rem;margin-top:4px;">
+          <span style="color:#2196F3;">🟦 Aller</span> / 
+          <span style="color:#FF9800;">🟧 Retour</span>
+        </div>
+        <div style="font-size:0.75rem;color:#999;margin-top:4px;">
+          🟢 Get on at: <strong>${fromStop.name}</strong><br>
+          🔴 Get off at: <strong>${toStop.name}</strong>
+        </div>
+      </div>
+    `;
+  });
+
+  tripResults.innerHTML = html;
+  // Ensure window.showRoute is available (it is in global scope)
+}
+
 // ============ ERROR LOGGING ============
 window.addEventListener('error', function(e) {
   try {
@@ -283,7 +505,7 @@ window.addEventListener('error', function(e) {
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v7.0 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
+  console.log(`🚌 Tunis Bus Live v8.0 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
   initPWA();
   loadLanguage();
   if (langSwitcher) langSwitcher.addEventListener('change', function() { setLanguage(this.value); });
@@ -301,6 +523,18 @@ async function init() {
   });
   feedbackModal.addEventListener('click', function(e) { if (e.target === this) closeFeedbackModal(); });
   if (closeFullscreenBtn) closeFullscreenBtn.addEventListener('click', closeFullscreenBus);
+
+  // Nearby stops
+  if (nearbyBtn) nearbyBtn.addEventListener('click', findNearbyStops);
+  if (closeNearby) closeNearby.addEventListener('click', function() { nearbyModal.classList.add('hidden'); });
+  if (nearbyModal) nearbyModal.addEventListener('click', function(e) { if (e.target === this) this.classList.add('hidden'); });
+
+  // Plan My Trip
+  if (planTripBtn) planTripBtn.addEventListener('click', openPlanTrip);
+  if (searchTripBtn) searchTripBtn.addEventListener('click', planTrip);
+  if (destinationInput) destinationInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') planTrip(); });
+  if (closePlanTrip) closePlanTrip.addEventListener('click', function() { planTripModal.classList.add('hidden'); });
+  if (planTripModal) planTripModal.addEventListener('click', function(e) { if (e.target === this) this.classList.add('hidden'); });
 
   await loadRoutes();
   setupTabs();
