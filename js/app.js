@@ -1,5 +1,5 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – v12.0 (3 Smart Trip Options)
+// 🚌 TUNIS BUS LIVE – v13.0 (4 Smart Options + Full Itinerary)
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap, focusOnBus } from './map.js';
@@ -13,9 +13,9 @@ const REMOVE_THRESHOLD = 10 * 60 * 1000;
 const AUTO_END_TIMEOUT = 5 * 60;
 const CLEANUP_INTERVAL = 30000;
 const WALK_SPEED_KMH = 5;
-const BUS_SPEED_KMH = 15;           // Average city bus speed
-const WAITING_TIME_MIN = 5;         // Average wait time per bus
-const TRANSFER_WALK_RADIUS_KM = 0.8; // Walk up to 800m to transfer
+const BUS_SPEED_KMH = 15;
+const WAITING_TIME_MIN = 5;
+const TRANSFER_WALK_RADIUS_KM = 0.8;
 
 // ============ STATE ============
 let currentView = 'passenger';
@@ -433,7 +433,7 @@ function buildStopGraph() {
 }
 
 // ============================================================
-// 🧠 DIJKSTRA ENGINE (Parametrized for Time, Transfers, Walking)
+// 🧠 DIJKSTRA ENGINE (Parametrized for 4 strategies)
 // ============================================================
 function runDijkstra(adj, startKey, endKey, weightFn) {
   const distMap = new Map();
@@ -552,7 +552,6 @@ function reconstructResult(result, startKey, endKey, stopMap) {
 
   let totalWalk = 0;
   path.forEach(edge => { if (edge.walkDist) totalWalk += edge.walkDist; });
-
   const busCount = path.filter(e => e.type === 'bus').length;
 
   // Merge consecutive bus legs with same route
@@ -599,8 +598,7 @@ function generateTripInstructions(routePath, userLocation, destinationLocation) 
     return steps;
   }
 
-  let prevStop = null;
-  routePath.forEach((edge, idx) => {
+  routePath.forEach((edge) => {
     if (edge.type === 'walk') {
       const dist = edge.walkDist || haversineDistance(edge.fromStop.lat, edge.fromStop.lng, edge.toStop.lat, edge.toStop.lng);
       const walkTime = (dist / WALK_SPEED_KMH) * 60;
@@ -610,7 +608,7 @@ function generateTripInstructions(routePath, userLocation, destinationLocation) 
         to: edge.toStop,
         distance: dist,
         time: walkTime,
-        instruction: `🚶 Walk ${Math.round(dist*1000)}m to ${edge.toStop.name} (~${Math.round(walkTime)} min)`
+        instruction: `🚶 Walk ${Math.round(dist*1000)}m to "${edge.toStop.name}" (~${Math.round(walkTime)} min)`
       });
     } else if (edge.type === 'bus') {
       const route = routeData.find(r => r.id === edge.routeId);
@@ -620,7 +618,7 @@ function generateTripInstructions(routePath, userLocation, destinationLocation) 
         routeName: route ? route.name : edge.routeId,
         fromStop: edge.fromStop,
         toStop: edge.toStop,
-        instruction: `🚌 Take ${edge.routeId} from ${edge.fromStop.name} to ${edge.toStop.name}`
+        instruction: `🚌 Take ${edge.routeId} from "${edge.fromStop.name}" to "${edge.toStop.name}"`
       });
     }
   });
@@ -647,7 +645,7 @@ function generateTripInstructions(routePath, userLocation, destinationLocation) 
   return steps;
 }
 
-// ============ DRAW TRIP ON MAP ============
+// ============ DRAW TRIP ON MAP (with clear walking vs bus) ============
 function drawTripOnMap(routePath, userLocation, destinationLocation) {
   try {
     const mapInstance = getMap();
@@ -667,10 +665,11 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
 
     routePath.forEach((edge, idx) => {
       if (edge.type === 'walk') {
+        // Grey, dashed line for walking (avoids "crossing buildings" visually)
         const walkLine = L.polyline([
           [edge.fromStop.lat, edge.fromStop.lng],
           [edge.toStop.lat, edge.toStop.lng]
-        ], { color: '#9E9E9E', weight: 3, dashArray: '5,5' }).addTo(tripLayer);
+        ], { color: '#9E9E9E', weight: 4, dashArray: '8, 8', opacity: 0.9 }).addTo(tripLayer);
         walkLine.bindPopup(`🚶 Walk to ${edge.toStop.name}`);
       } else if (edge.type === 'bus') {
         const route = routeData.find(r => r.id === edge.routeId);
@@ -684,7 +683,8 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
         const segment = allStops.slice(start, end + 1).map(s => [s.lat, s.lng]);
         const colors = ['#2196F3', '#FF9800', '#4CAF50', '#9C27B0', '#F44336'];
         const color = colors[idx % colors.length];
-        const line = L.polyline(segment, { color: color, weight: 5, opacity: 0.8 }).addTo(tripLayer);
+        // Solid line for bus
+        const line = L.polyline(segment, { color: color, weight: 6, opacity: 0.8 }).addTo(tripLayer);
         line.bindPopup(`🚌 ${edge.routeId}`);
       }
     });
@@ -699,14 +699,14 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
       mapInstance.setView([userLocation.lat, userLocation.lng], 14);
     }
 
-    showToast('Trip shown on map ✅', 'success');
+    showToast('Trip shown on map ✅ (Walking = Grey dashed)', 'success');
   } catch (e) {
     console.error('Error drawing trip:', e);
     showToast('Error showing trip: ' + e.message, 'error');
   }
 }
 
-// ============ PLAN MY TRIP (3 OPTIONS) ============
+// ============ PLAN MY TRIP (4 OPTIONS) ============
 function openPlanTrip() {
   planTripModal.classList.remove('hidden');
   tripResults.innerHTML = '';
@@ -844,26 +844,32 @@ function executeSmartRoute(fromStop, toStop, userLocation) {
 
   // 1. Fastest (Time)
   const resTime = runDijkstra(adj, startKey, endKey, (e) => e.timeWeight);
-  // 2. Fewest Buses (walking costs tiny, bus costs 1)
+  // 2. Fewest Buses
   const resTransfers = runDijkstra(adj, startKey, endKey, (e) => e.type === 'bus' ? 1 : 0.001);
-  // 3. Least Walking (bus costs tiny, walking costs distance)
+  // 3. Least Walking
   const resWalk = runDijkstra(adj, startKey, endKey, (e) => e.type === 'walk' ? e.walkDist : 0.001);
+  // 4. Balanced (Time + Walk penalty + Transfer penalty)
+  const resBalanced = runDijkstra(adj, startKey, endKey, (e) => {
+    const walkPenalty = (e.walkDist || 0) * 2; // 1km walk adds 2 min penalty
+    const transferPenalty = e.type === 'bus' ? 1 : 0;
+    return e.timeWeight + walkPenalty + transferPenalty;
+  });
 
   const opt1 = reconstructResult(resTime, startKey, endKey, stopMap);
   const opt2 = reconstructResult(resTransfers, startKey, endKey, stopMap);
   const opt3 = reconstructResult(resWalk, startKey, endKey, stopMap);
+  const opt4 = reconstructResult(resBalanced, startKey, endKey, stopMap);
 
-  // Filter out nulls and deduplicate (if same path, keep only first)
+  // Filter out nulls and deduplicate
   const options = [];
   const seen = new Set();
-  [opt1, opt2, opt3].forEach(opt => {
+  [opt1, opt2, opt3, opt4].forEach(opt => {
     if (!opt) return;
     const key = opt.path.map(e => `${e.type}_${e.fromStop.lat}_${e.toStop.lat}`).join('|');
     if (!seen.has(key)) { seen.add(key); options.push(opt); }
   });
 
   if (options.length === 0) {
-    // No bus route, check if walking directly is feasible
     const dist = haversineDistance(fromStop.lat, fromStop.lng, toStop.lat, toStop.lng);
     if (dist < 3) {
       const walkTime = (dist / WALK_SPEED_KMH) * 60;
@@ -884,7 +890,7 @@ function executeSmartRoute(fromStop, toStop, userLocation) {
     return;
   }
 
-  // Store options globally for the "Show on map" buttons
+  // Store options globally for "Show on map"
   window._tripOptions = options.map(opt => ({
     path: opt.path,
     userLocation: userLocation,
@@ -892,9 +898,10 @@ function executeSmartRoute(fromStop, toStop, userLocation) {
   }));
 
   let html = `<div style="margin-bottom:10px;font-weight:bold;font-size:0.95rem;">✅ ${options.length} route(s) found. Choose one:</div>`;
-  html += `<div style="display:flex;flex-direction:column;gap:10px;max-height:300px;overflow-y:auto;">`;
+  html += `<div style="display:flex;flex-direction:column;gap:12px;max-height:350px;overflow-y:auto;">`;
 
-  const labels = ['⚡ Fastest (Time)', '🔄 Fewest Buses', '🚶 Least Walking'];
+  const labels = ['⚡ Fastest (Time)', '🔄 Fewest Buses', '🚶 Least Walking', '⚖️ Balanced'];
+  const colors = ['#2196F3', '#FF9800', '#4CAF50', '#9C27B0'];
 
   options.forEach((opt, idx) => {
     const instructions = generateTripInstructions(opt.path, userLocation, destLocation);
@@ -902,20 +909,26 @@ function executeSmartRoute(fromStop, toStop, userLocation) {
     const totalTime = opt.totalTime;
     const busCount = opt.busCount;
 
+    // Build full step list
+    let stepsHtml = instructions.map(step => 
+      `<div style="font-size:0.8rem;padding:2px 0;border-bottom:1px solid #f0f0f0;">${step.instruction}</div>`
+    ).join('');
+
     html += `
-      <div style="background:#f8f9fa;border-radius:10px;padding:12px;border-left:4px solid ${['#2196F3', '#FF9800', '#4CAF50'][idx]};">
+      <div style="background:#f8f9fa;border-radius:10px;padding:12px;border-left:4px solid ${colors[idx]};">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">
-          <strong style="font-size:0.95rem;">${labels[idx] || `Option ${idx+1}`}</strong>
+          <strong style="font-size:0.95rem;">${labels[idx]}</strong>
           <div style="display:flex;gap:12px;font-size:0.75rem;color:#555;">
             <span>⏱️ ${totalTime} min</span>
             <span>🚶 ${totalWalk}m</span>
             <span>🚌 ${busCount} bus(es)</span>
           </div>
         </div>
-        <div style="font-size:0.75rem;color:#666;margin-top:4px;max-height:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-          ${instructions.map(i => i.instruction).join(' → ')}
+        <!-- FULL WRITTEN ITINERARY -->
+        <div style="margin-top:6px;max-height:80px;overflow-y:auto;background:white;padding:6px;border-radius:6px;border:1px solid #eee;">
+          ${stepsHtml}
         </div>
-        <button class="btn btn-primary" style="width:auto;padding:4px 12px;font-size:0.75rem;margin-top:6px;" onclick="window.selectTripOption(${idx}); planTripModal.classList.add('hidden');">
+        <button class="btn btn-primary" style="width:auto;padding:4px 12px;font-size:0.75rem;margin-top:8px;" onclick="window.selectTripOption(${idx}); planTripModal.classList.add('hidden');">
           <i class="fas fa-map"></i> Show on map
         </button>
       </div>
@@ -1053,7 +1066,7 @@ window.addEventListener('error', function(e) {
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v12.0 – 3 Smart Trip Options`);
+  console.log(`🚌 Tunis Bus Live v13.0 – 4 Smart Trip Options`);
   initPWA();
   loadLanguage();
   if (langSwitcher) langSwitcher.addEventListener('change', function() { setLanguage(this.value); });
