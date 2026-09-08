@@ -1,9 +1,7 @@
 // ============================================================
 // 🚌 TUNIS BUS LIVE – COMPLETE FINAL VERSION
-// Full-screen bus view | Auto-direction | Multi-language
-// Admin Dashboard | Feedback | Error Logging
-// Nearby Stops | Plan My Trip with Map Picker
-// Capacitor 4 + Background Geolocation
+// Multi‑bus trip planner | Walking directions | User location
+// All previous features included
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap, focusOnBus } from './map.js';
@@ -16,6 +14,7 @@ const STALE_THRESHOLD = 3 * 60 * 1000;
 const REMOVE_THRESHOLD = 10 * 60 * 1000;
 const AUTO_END_TIMEOUT = 5 * 60;
 const CLEANUP_INTERVAL = 30000;
+const WALK_SPEED_KMH = 5; // average walking speed
 
 // ============ STATE ============
 let currentView = 'passenger';
@@ -42,6 +41,7 @@ let adminInterval = null;
 let userLocationForTrip = null;
 let destinationSelectionMode = false;
 let destinationSelectionCallback = null;
+let userLocationMarker = null;
 
 const isNative = window.Capacitor && Capacitor.isNative;
 
@@ -358,55 +358,27 @@ function displayNearbyResults(stops) {
   nearbyModal.classList.remove('hidden');
 }
 
-// ============ PLAN MY TRIP (with Map Picker) ============
-function openPlanTrip() {
-  planTripModal.classList.remove('hidden');
-  tripResults.innerHTML = '';
-  destinationInput.value = '';
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-      pos => {
-        userLocationForTrip = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        showToast('📍 Location detected! Enter your destination or tap the map.', 'success');
-      },
-      err => {
-        showToast('Could not get location. Please enter your starting stop manually.', 'warning');
-        userLocationForTrip = null;
-      }
-    );
+// ============ USER LOCATION MARKER ============
+function updateUserLocation(lat, lng) {
+  if (!map) return;
+  if (!userLocationMarker) {
+    userLocationMarker = L.circleMarker([lat, lng], {
+      radius: 8,
+      color: '#2196F3',
+      fillColor: '#fff',
+      fillOpacity: 1,
+      weight: 3,
+      className: 'user-location-marker'
+    }).addTo(map);
+    userLocationMarker.bindPopup('You are here');
+  } else {
+    userLocationMarker.setLatLng([lat, lng]);
   }
+  // Also update the map view if needed, but don't force zoom.
 }
 
-// Destination Map Picker
-function startDestinationMapPicker() {
-  destinationSelectionMode = true;
-  planTripModal.classList.add('hidden');
-  showToast('📍 Tap on the map to select your destination.', 'info');
-  const mapInstance = getMap();
-  if (!mapInstance) return;
-  
-  // Store the callback
-  destinationSelectionCallback = function(e) {
-    const lat = e.latlng.lat;
-    const lng = e.latlng.lng;
-    const nearest = findNearestStopFromCoords(lat, lng);
-    if (nearest) {
-      destinationInput.value = nearest.name;
-      destinationSelectionMode = false;
-      mapInstance.off('click', destinationSelectionCallback);
-      destinationSelectionCallback = null;
-      planTripModal.classList.remove('hidden');
-      showToast(`✅ Selected: ${nearest.name}`, 'success');
-      setTimeout(planTrip, 300);
-    } else {
-      showToast('No stop found near that location. Try again.', 'warning');
-    }
-  };
-  
-  mapInstance.on('click', destinationSelectionCallback);
-}
-
-function findNearestStopFromCoords(lat, lng) {
+// ============ MULTI‑BUS TRIP PLANNER ============
+function buildStopGraph() {
   const stopMap = new Map();
   routeData.forEach(route => {
     route.stops.forEach(stop => {
@@ -422,10 +394,172 @@ function findNearestStopFromCoords(lat, lng) {
       stopMap.get(key).routes.add(route.id);
     });
   });
-  const uniqueStops = Array.from(stopMap.values());
+  return stopMap;
+}
+
+function findMultiBusRoutes(fromStop, toStop, maxTransfers = 2) {
+  const stopMap = buildStopGraph();
+  const allStops = Array.from(stopMap.values());
+  const fromKey = `${fromStop.lat},${fromStop.lng}`;
+  const toKey = `${toStop.lat},${toStop.lng}`;
+  const fromRoutes = fromStop.routes;
+  const toRoutes = toStop.routes;
+
+  // Check direct routes first
+  const direct = [...fromRoutes].filter(r => toRoutes.has(r));
+  if (direct.length > 0) {
+    return direct.map(routeId => ({
+      legs: [{
+        type: 'bus',
+        routeId: routeId,
+        fromStop: fromStop,
+        toStop: toStop
+      }]
+    }));
+  }
+
+  // Try one transfer
+  const oneTransferPaths = [];
+  const intermediateStops = allStops.filter(s => {
+    const key = `${s.lat},${s.lng}`;
+    if (key === fromKey || key === toKey) return false;
+    const sRoutes = s.routes;
+    const commonFrom = [...fromRoutes].filter(r => sRoutes.has(r));
+    const commonTo = [...toRoutes].filter(r => sRoutes.has(r));
+    return commonFrom.length > 0 && commonTo.length > 0;
+  });
+  intermediateStops.forEach(stop => {
+    const sRoutes = stop.routes;
+    const bus1 = [...fromRoutes].find(r => sRoutes.has(r));
+    const bus2 = [...toRoutes].find(r => sRoutes.has(r));
+    if (bus1 && bus2) {
+      oneTransferPaths.push({
+        legs: [
+          { type: 'bus', routeId: bus1, fromStop: fromStop, toStop: stop },
+          { type: 'bus', routeId: bus2, fromStop: stop, toStop: toStop }
+        ]
+      });
+    }
+  });
+
+  if (oneTransferPaths.length > 0) return oneTransferPaths;
+
+  // Two transfers (simplified – find route from fromStop to some intermediate, then to another, then to toStop)
+  // We'll try a BFS of depth 3.
+  // For simplicity, we'll just return empty and show no route found.
+  // You can expand this later.
+
+  return [];
+}
+
+function generateTripInstructions(routePath, userLocation, destinationLocation) {
+  let steps = [];
+  // Walking to first stop
+  if (userLocation) {
+    const firstStop = routePath.legs[0].fromStop;
+    const dist = haversineDistance(userLocation.lat, userLocation.lng, firstStop.lat, firstStop.lng);
+    const walkTime = dist / WALK_SPEED_KMH * 60; // minutes
+    steps.push({
+      type: 'walk',
+      from: userLocation,
+      to: firstStop,
+      distance: dist,
+      time: walkTime,
+      instruction: `Walk to ${firstStop.name} (${Math.round(dist*1000)}m, ~${Math.round(walkTime)} min)`
+    });
+  }
+
+  routePath.legs.forEach((leg, idx) => {
+    const route = routeData.find(r => r.id === leg.routeId);
+    if (!route) return;
+    const dir = 'forward'; // we assume forward for simplicity; could detect direction
+    const dirLabel = dir === 'forward' ? 'Aller' : 'Retour';
+    steps.push({
+      type: 'bus',
+      routeId: leg.routeId,
+      routeName: route.name,
+      direction: dir,
+      fromStop: leg.fromStop,
+      toStop: leg.toStop,
+      instruction: `🚌 Take ${leg.routeId} (${dirLabel}) from ${leg.fromStop.name} to ${leg.toStop.name}`
+    });
+  });
+
+  // Walking to destination
+  if (destinationLocation) {
+    const lastStop = routePath.legs[routePath.legs.length - 1].toStop;
+    const dist = haversineDistance(lastStop.lat, lastStop.lng, destinationLocation.lat, destinationLocation.lng);
+    const walkTime = dist / WALK_SPEED_KMH * 60;
+    if (dist > 0.05) { // if destination is not exactly the stop
+      steps.push({
+        type: 'walk',
+        from: lastStop,
+        to: destinationLocation,
+        distance: dist,
+        time: walkTime,
+        instruction: `Walk to your destination (${Math.round(dist*1000)}m, ~${Math.round(walkTime)} min)`
+      });
+    }
+  }
+
+  return steps;
+}
+
+// ============ PLAN MY TRIP ============
+function openPlanTrip() {
+  planTripModal.classList.remove('hidden');
+  tripResults.innerHTML = '';
+  destinationInput.value = '';
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        userLocationForTrip = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        updateUserLocation(pos.coords.latitude, pos.coords.longitude);
+        showToast('📍 Location detected! Enter your destination or tap the map.', 'success');
+      },
+      err => {
+        showToast('Could not get location. Please enter your starting stop manually.', 'warning');
+        userLocationForTrip = null;
+      }
+    );
+  }
+}
+
+function startDestinationMapPicker() {
+  destinationSelectionMode = true;
+  planTripModal.classList.add('hidden');
+  showToast('📍 Tap on the map to select your destination.', 'info');
+  const mapInstance = getMap();
+  if (!mapInstance) return;
+  
+  destinationSelectionCallback = function(e) {
+    const lat = e.latlng.lat;
+    const lng = e.latlng.lng;
+    const nearest = findNearestStopFromCoords(lat, lng);
+    if (nearest) {
+      destinationInput.value = nearest.name;
+      destinationSelectionMode = false;
+      mapInstance.off('click', destinationSelectionCallback);
+      destinationSelectionCallback = null;
+      planTripModal.classList.remove('hidden');
+      showToast(`✅ Selected: ${nearest.name}`, 'success');
+      // Store destination location for walking
+      window._destLocation = { lat, lng, name: nearest.name };
+      setTimeout(planTrip, 300);
+    } else {
+      showToast('No stop found near that location. Try again.', 'warning');
+    }
+  };
+  
+  mapInstance.on('click', destinationSelectionCallback);
+}
+
+function findNearestStopFromCoords(lat, lng) {
+  const stopMap = buildStopGraph();
+  const allStops = Array.from(stopMap.values());
   let minDist = Infinity;
   let nearest = null;
-  uniqueStops.forEach(stop => {
+  allStops.forEach(stop => {
     const d = haversineDistance(lat, lng, stop.lat, stop.lng);
     if (d < minDist) {
       minDist = d;
@@ -442,26 +576,11 @@ async function planTrip() {
     return;
   }
 
-  // Build stop index
-  const stopMap = new Map();
-  routeData.forEach(route => {
-    route.stops.forEach(stop => {
-      const key = `${stop.lat},${stop.lng}`;
-      if (!stopMap.has(key)) {
-        stopMap.set(key, {
-          name: stop.name,
-          lat: stop.lat,
-          lng: stop.lng,
-          routes: new Set()
-        });
-      }
-      stopMap.get(key).routes.add(route.id);
-    });
-  });
-  const uniqueStops = Array.from(stopMap.values());
+  const stopMap = buildStopGraph();
+  const allStops = Array.from(stopMap.values());
 
   // Find destination stops
-  const matchedStops = uniqueStops.filter(s => 
+  const matchedStops = allStops.filter(s => 
     s.name.toLowerCase().includes(destQuery.toLowerCase())
   );
 
@@ -472,12 +591,13 @@ async function planTrip() {
     return;
   }
 
-  // Find user's nearest stop
+  // Find user's nearest stop (or use a manual selection fallback)
   let userStop = null;
-  if (userLocationForTrip) {
+  let userLocation = userLocationForTrip;
+  if (userLocation) {
     let minDist = Infinity;
-    uniqueStops.forEach(stop => {
-      const d = haversineDistance(userLocationForTrip.lat, userLocationForTrip.lng, stop.lat, stop.lng);
+    allStops.forEach(stop => {
+      const d = haversineDistance(userLocation.lat, userLocation.lng, stop.lat, stop.lng);
       if (d < minDist) {
         minDist = d;
         userStop = stop;
@@ -488,7 +608,7 @@ async function planTrip() {
     tripResults.innerHTML = `
       <p style="color:orange;">⚠️ Could not detect your location. Please select your current stop:</p>
       <div style="max-height:150px;overflow-y:auto;margin-top:5px;">
-        ${uniqueStops.slice(0, 20).map(s => 
+        ${allStops.slice(0, 20).map(s => 
           `<div class="stop-select-item" data-lat="${s.lat}" data-lng="${s.lng}" data-name="${s.name}" style="padding:6px;border-bottom:1px solid #eee;cursor:pointer;">${s.name}</div>`
         ).join('')}
       </div>
@@ -498,58 +618,70 @@ async function planTrip() {
         const lat = parseFloat(this.dataset.lat);
         const lng = parseFloat(this.dataset.lng);
         const name = this.dataset.name;
-        const stop = uniqueStops.find(s => s.lat === lat && s.lng === lng);
+        const stop = allStops.find(s => s.lat === lat && s.lng === lng);
         if (stop) {
-          findConnectingRoutes(stop, matchedStops[0]);
+          userStop = stop;
+          userLocation = { lat, lng };
+          // Re-run plan with this stop
+          findRoutesAndDisplay(userStop, matchedStops[0]);
         }
       });
     });
     return;
   }
 
-  findConnectingRoutes(userStop, matchedStops[0]);
+  findRoutesAndDisplay(userStop, matchedStops[0]);
 }
 
-function findConnectingRoutes(fromStop, toStop) {
-  const commonRoutes = [...fromStop.routes].filter(r => toStop.routes.has(r));
+function findRoutesAndDisplay(fromStop, toStop) {
+  // Get destination location (if set via map picker)
+  const destLocation = window._destLocation || null;
+  const userLocation = userLocationForTrip;
 
-  if (commonRoutes.length === 0) {
+  // Find multi‑bus routes
+  const routePaths = findMultiBusRoutes(fromStop, toStop, 2);
+
+  if (routePaths.length === 0) {
     tripResults.innerHTML = `
       <div style="background:#fff3cd;padding:10px;border-radius:8px;">
-        <p>❌ No direct bus line connects <strong>${fromStop.name}</strong> and <strong>${toStop.name}</strong>.</p>
-        <p style="font-size:0.85rem;color:#666;">Try using a different destination or consider changing buses.</p>
-        <p style="font-size:0.85rem;color:#666;">Routes at ${fromStop.name}: ${[...fromStop.routes].join(', ')}</p>
-        <p style="font-size:0.85rem;color:#666;">Routes at ${toStop.name}: ${[...toStop.routes].join(', ')}</p>
+        <p>❌ No route found from <strong>${fromStop.name}</strong> to <strong>${toStop.name}</strong>.</p>
+        <p style="font-size:0.85rem;color:#666;">Try a different destination or consider walking to a nearby stop.</p>
       </div>
     `;
     return;
   }
 
-  let html = `<div style="background:#d4edda;padding:10px;border-radius:8px;margin-bottom:8px;">
-    <p>✅ <strong>${commonRoutes.length}</strong> direct bus line(s) connect your stop to your destination!</p>
+  // Generate instructions for each route path (take the first one)
+  const bestPath = routePaths[0];
+  const instructions = generateTripInstructions(bestPath, userLocation, destLocation);
+
+  // Build HTML output
+  let html = `<div style="background:#d4edda;padding:10px;border-radius:8px;margin-bottom:12px;">
+    <p>✅ <strong>Route found!</strong> Follow these steps:</p>
   </div>`;
 
-  commonRoutes.forEach(routeId => {
-    const route = routeData.find(r => r.id === routeId);
-    if (!route) return;
+  instructions.forEach((step, idx) => {
+    const icon = step.type === 'walk' ? '🚶' : '🚌';
     html += `
-      <div style="border:1px solid #ddd;border-radius:8px;padding:10px;margin-bottom:8px;cursor:pointer;" onclick="window.showRoute('${routeId}', routeData); planTripModal.classList.add('hidden');">
-        <div style="font-weight:bold;">🚌 Route ${routeId}</div>
-        <div style="font-size:0.85rem;color:#666;">${route.name}</div>
-        <div style="font-size:0.8rem;margin-top:4px;">
-          <span style="color:#2196F3;">🟦 Aller</span> / 
-          <span style="color:#FF9800;">🟧 Retour</span>
-        </div>
-        <div style="font-size:0.75rem;color:#999;margin-top:4px;">
-          🟢 Get on at: <strong>${fromStop.name}</strong><br>
-          🔴 Get off at: <strong>${toStop.name}</strong>
+      <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #eee;">
+        <span style="font-size:1.2rem;">${icon}</span>
+        <div style="flex:1;">
+          <div style="font-weight:bold;">${step.instruction}</div>
+          ${step.type === 'bus' ? `<div style="font-size:0.8rem;color:#666;">${step.routeName}</div>` : ''}
+          ${step.distance ? `<div style="font-size:0.75rem;color:#999;">${Math.round(step.distance*1000)}m · ~${Math.round(step.time)} min</div>` : ''}
         </div>
       </div>
     `;
   });
 
+  // Add a button to show on map
+  html += `
+    <button class="btn btn-primary" style="width:auto;padding:8px 16px;margin-top:10px;" onclick="window.showRoute('${bestPath.legs[0].routeId}', routeData); planTripModal.classList.add('hidden');">
+      <i class="fas fa-map"></i> Show on map
+    </button>
+  `;
+
   tripResults.innerHTML = html;
-  // Ensure window.showRoute is available (it is in global scope)
 }
 
 // ============ ERROR LOGGING ============
@@ -566,7 +698,7 @@ window.addEventListener('error', function(e) {
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v8.0 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
+  console.log(`🚌 Tunis Bus Live v9.0 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
   initPWA();
   loadLanguage();
   if (langSwitcher) langSwitcher.addEventListener('change', function() { setLanguage(this.value); });
@@ -638,7 +770,10 @@ async function init() {
 
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
-      pos => autoDetectRoute(pos.coords.latitude, pos.coords.longitude),
+      pos => {
+        autoDetectRoute(pos.coords.latitude, pos.coords.longitude);
+        updateUserLocation(pos.coords.latitude, pos.coords.longitude);
+      },
       () => {},
       { timeout: 5000, enableHighAccuracy: false }
     );
@@ -1298,4 +1433,5 @@ function showToast(message, type = 'info') {
 }
 window.showToast = showToast;
 
+// ============ START ============
 document.addEventListener('DOMContentLoaded', init);
