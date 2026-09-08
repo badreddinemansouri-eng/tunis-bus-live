@@ -1,5 +1,5 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – v10.4 (WITH CONSOLE VIEWER)
+// 🚌 TUNIS BUS LIVE – v10.5 (BFS FIXED)
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap, focusOnBus } from './map.js';
@@ -395,39 +395,51 @@ function buildStopGraph() {
   return stopMap;
 }
 
-// ============ MULTI‑BUS BFS ============
+// ============ MULTI‑BUS BFS (FIXED) ============
 function findMultiBusRoutes(fromStop, toStop, maxTransfers = 5) {
   const stopMap = buildStopGraph();
-  if (fromStop.lat === toStop.lat && fromStop.lng === toStop.lng) {
+  const fromKey = `${fromStop.lat},${fromStop.lng}`;
+  const toKey = `${toStop.lat},${toStop.lng}`;
+
+  if (fromKey === toKey) {
     return [{ legs: [] }];
   }
+
   const queue = [];
   const visited = new Set();
-  visited.add(`${fromStop.lat},${fromStop.lng}`);
-  queue.push({ stop: fromStop, path: [] });
+  visited.add(fromKey);
+  queue.push({ stopKey: fromKey, path: [] });
+
   while (queue.length > 0) {
-    const { stop, path } = queue.shift();
-    if (stop.lat === toStop.lat && stop.lng === toStop.lng) {
+    const { stopKey, path } = queue.shift();
+    const stop = stopMap.get(stopKey);
+    if (!stop) continue;
+
+    if (stopKey === toKey) {
       return [{ legs: path }];
     }
+
     const routesFromStop = stop.routes;
     for (const routeId of routesFromStop) {
       const route = routeData.find(r => r.id === routeId);
       if (!route) continue;
       const stopsOnRoute = route.stops;
       for (const nextStop of stopsOnRoute) {
-        const key = `${nextStop.lat},${nextStop.lng}`;
-        if (visited.has(key)) continue;
-        if (nextStop.lat === stop.lat && nextStop.lng === stop.lng) continue;
-        visited.add(key);
+        const nextKey = `${nextStop.lat},${nextStop.lng}`;
+        if (visited.has(nextKey)) continue;
+        if (nextKey === stopKey) continue;
+        visited.add(nextKey);
+        // Get the full stop object from the map for the leg
+        const fullNextStop = stopMap.get(nextKey);
+        if (!fullNextStop) continue;
         const newPath = [...path, {
           type: 'bus',
           routeId: routeId,
           fromStop: stop,
-          toStop: nextStop
+          toStop: fullNextStop
         }];
         if (newPath.length > maxTransfers) continue;
-        queue.push({ stop: nextStop, path: newPath });
+        queue.push({ stopKey: nextKey, path: newPath });
       }
     }
   }
@@ -621,7 +633,7 @@ async function planTrip() {
   console.log('📝 Destination input:', destInput);
 
   let destStop = selectedDestinationStop || window._selectedDestinationStop;
-  console.log('🗺️ Stored destination stop:', destStop);
+  console.log('🗺️ Stored destination stop:', destStop ? destStop.name : 'none');
 
   if (!destStop) {
     if (!destInput) {
@@ -631,7 +643,7 @@ async function planTrip() {
     const stopMap = buildStopGraph();
     const allStops = Array.from(stopMap.values());
     const matchedStops = allStops.filter(s => s.name.toLowerCase().includes(destInput.toLowerCase()));
-    console.log('🔍 Matched stops by name:', matchedStops);
+    console.log('🔍 Matched stops by name:', matchedStops.map(s => s.name));
     if (matchedStops.length === 0) {
       tripResults.innerHTML = `
         <p style="color:red;">❌ No stops found matching "${destInput}". Try another name or tap the map.</p>
@@ -639,7 +651,7 @@ async function planTrip() {
       return;
     }
     destStop = matchedStops[0];
-    console.log('🎯 Using first matched stop:', destStop);
+    console.log('🎯 Using first matched stop:', destStop.name);
   }
 
   if (!destStop) {
@@ -663,7 +675,7 @@ async function planTrip() {
         userStop = stop;
       }
     });
-    console.log('📍 User stop (auto):', userStop);
+    console.log('📍 User stop (auto):', userStop ? userStop.name : 'none');
   } else {
     tripResults.innerHTML = `
       <p style="color:orange;">⚠️ Could not detect your location. Please select your current stop:</p>
@@ -701,14 +713,14 @@ async function planTrip() {
 
 function findRoutesAndDisplay(fromStop, toStop) {
   console.log('🔍 findRoutesAndDisplay called');
-  console.log('📍 From:', fromStop);
-  console.log('📍 To:', toStop);
+  console.log('📍 From:', fromStop.name);
+  console.log('📍 To:', toStop.name);
 
   const destLocation = { lat: toStop.lat, lng: toStop.lng };
   const userLocation = userLocationForTrip;
 
   const routePaths = findMultiBusRoutes(fromStop, toStop, 5);
-  console.log('🚌 Route paths found:', routePaths);
+  console.log('🚌 Route paths found:', routePaths.length);
 
   if (routePaths.length === 0) {
     tripResults.innerHTML = `
@@ -722,7 +734,7 @@ function findRoutesAndDisplay(fromStop, toStop) {
 
   const bestPath = routePaths[0];
   const instructions = generateTripInstructions(bestPath, userLocation, destLocation);
-  console.log('📋 Instructions:', instructions);
+  console.log('📋 Instructions:', instructions.length);
 
   let html = `<div style="background:#d4edda;padding:10px;border-radius:8px;margin-bottom:12px;">
     <p>✅ <strong>Route found!</strong> Follow these steps:</p>
@@ -752,7 +764,7 @@ function findRoutesAndDisplay(fromStop, toStop) {
   window.drawTripOnMap = drawTripOnMap;
 }
 
-// ============ CONSOLE VIEWER (Phone Debug) ============
+// ============ CONSOLE VIEWER ============
 function addConsoleViewer() {
   const panel = document.createElement('div');
   panel.id = 'consolePanel';
@@ -870,7 +882,7 @@ window.addEventListener('error', function(e) {
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v10.4 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
+  console.log(`🚌 Tunis Bus Live v10.5 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
   initPWA();
   loadLanguage();
   if (langSwitcher) langSwitcher.addEventListener('change', function() { setLanguage(this.value); });
@@ -949,7 +961,6 @@ async function init() {
     );
   }
 
-  // Add console viewer after everything is ready
   addConsoleViewer();
 
   console.log('✅ App ready');
