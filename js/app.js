@@ -1,5 +1,5 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – v10.5 (BFS FIXED)
+// 🚌 TUNIS BUS LIVE – v10.6 (Show on Map Fixed)
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap, focusOnBus } from './map.js';
@@ -395,7 +395,7 @@ function buildStopGraph() {
   return stopMap;
 }
 
-// ============ MULTI‑BUS BFS (FIXED) ============
+// ============ MULTI‑BUS BFS ============
 function findMultiBusRoutes(fromStop, toStop, maxTransfers = 5) {
   const stopMap = buildStopGraph();
   const fromKey = `${fromStop.lat},${fromStop.lng}`;
@@ -429,7 +429,6 @@ function findMultiBusRoutes(fromStop, toStop, maxTransfers = 5) {
         if (visited.has(nextKey)) continue;
         if (nextKey === stopKey) continue;
         visited.add(nextKey);
-        // Get the full stop object from the map for the leg
         const fullNextStop = stopMap.get(nextKey);
         if (!fullNextStop) continue;
         const newPath = [...path, {
@@ -510,60 +509,87 @@ function generateTripInstructions(routePath, userLocation, destinationLocation) 
   return steps;
 }
 
-// ============ DRAW TRIP ON MAP ============
+// ============ DRAW TRIP ON MAP (FIXED) ============
 function drawTripOnMap(routePath, userLocation, destinationLocation) {
-  const mapInstance = getMap();
-  if (!mapInstance) return;
-  if (tripLayer) {
-    mapInstance.removeLayer(tripLayer);
-    tripLayer = null;
-  }
-  tripLayer = L.layerGroup().addTo(mapInstance);
+  try {
+    console.log('🗺️ drawTripOnMap called');
+    console.log('routePath:', routePath);
+    const mapInstance = getMap();
+    if (!mapInstance) {
+      console.error('Map not initialized');
+      showToast('Map not ready. Please refresh.', 'error');
+      return;
+    }
+    if (!routePath || !routePath.legs) {
+      console.error('Invalid routePath:', routePath);
+      showToast('Invalid route data. Try again.', 'error');
+      return;
+    }
+    if (tripLayer) {
+      mapInstance.removeLayer(tripLayer);
+      tripLayer = null;
+    }
+    tripLayer = L.layerGroup().addTo(mapInstance);
 
-  if (userLocation && routePath.legs && routePath.legs.length > 0) {
-    const firstStop = routePath.legs[0].fromStop;
-    if (firstStop) {
-      const walkLine = L.polyline([
-        [userLocation.lat, userLocation.lng],
-        [firstStop.lat, firstStop.lng]
-      ], { color: '#9E9E9E', weight: 3, dashArray: '5,5' }).addTo(tripLayer);
-      walkLine.bindPopup('Walk to stop');
+    // Walking to first stop
+    if (userLocation && routePath.legs.length > 0) {
+      const firstStop = routePath.legs[0].fromStop;
+      if (firstStop && firstStop.lat && firstStop.lng) {
+        const walkLine = L.polyline([
+          [userLocation.lat, userLocation.lng],
+          [firstStop.lat, firstStop.lng]
+        ], { color: '#9E9E9E', weight: 3, dashArray: '5,5' }).addTo(tripLayer);
+        walkLine.bindPopup('Walk to stop');
+      }
     }
-  }
-  if (routePath.legs) {
-    routePath.legs.forEach((leg, idx) => {
-      const route = routeData.find(r => r.id === leg.routeId);
-      if (!route) return;
-      const allStops = route.stops;
-      const fromIdx = allStops.findIndex(s => s.lat === leg.fromStop.lat && s.lng === leg.fromStop.lng);
-      const toIdx = allStops.findIndex(s => s.lat === leg.toStop.lat && s.lng === leg.toStop.lng);
-      if (fromIdx === -1 || toIdx === -1) return;
-      const start = Math.min(fromIdx, toIdx);
-      const end = Math.max(fromIdx, toIdx);
-      const segment = allStops.slice(start, end + 1).map(s => [s.lat, s.lng]);
-      const colors = ['#2196F3', '#FF9800', '#4CAF50', '#9C27B0', '#F44336'];
-      const color = colors[idx % colors.length];
-      const line = L.polyline(segment, { color: color, weight: 5, opacity: 0.8 }).addTo(tripLayer);
-      line.bindPopup(`🚌 ${leg.routeId}`);
-    });
-  }
-  if (destinationLocation && routePath.legs && routePath.legs.length > 0) {
-    const lastStop = routePath.legs[routePath.legs.length - 1].toStop;
-    if (lastStop) {
-      const walkLine = L.polyline([
-        [lastStop.lat, lastStop.lng],
-        [destinationLocation.lat, destinationLocation.lng]
-      ], { color: '#9E9E9E', weight: 3, dashArray: '5,5' }).addTo(tripLayer);
-      walkLine.bindPopup('Walk to destination');
+
+    // Bus legs
+    if (routePath.legs) {
+      routePath.legs.forEach((leg, idx) => {
+        const route = routeData.find(r => r.id === leg.routeId);
+        if (!route) return;
+        const allStops = route.stops;
+        const fromIdx = allStops.findIndex(s => s.lat === leg.fromStop.lat && s.lng === leg.fromStop.lng);
+        const toIdx = allStops.findIndex(s => s.lat === leg.toStop.lat && s.lng === leg.toStop.lng);
+        if (fromIdx === -1 || toIdx === -1) return;
+        const start = Math.min(fromIdx, toIdx);
+        const end = Math.max(fromIdx, toIdx);
+        const segment = allStops.slice(start, end + 1).map(s => [s.lat, s.lng]);
+        const colors = ['#2196F3', '#FF9800', '#4CAF50', '#9C27B0', '#F44336'];
+        const color = colors[idx % colors.length];
+        const line = L.polyline(segment, { color: color, weight: 5, opacity: 0.8 }).addTo(tripLayer);
+        line.bindPopup(`🚌 ${leg.routeId}`);
+      });
     }
-  }
-  const bounds = tripLayer.getBounds();
-  if (bounds.isValid()) {
-    mapInstance.fitBounds(bounds, { padding: [50, 50] });
+
+    // Walking to destination
+    if (destinationLocation && routePath.legs && routePath.legs.length > 0) {
+      const lastStop = routePath.legs[routePath.legs.length - 1].toStop;
+      if (lastStop && lastStop.lat && lastStop.lng) {
+        const walkLine = L.polyline([
+          [lastStop.lat, lastStop.lng],
+          [destinationLocation.lat, destinationLocation.lng]
+        ], { color: '#9E9E9E', weight: 3, dashArray: '5,5' }).addTo(tripLayer);
+        walkLine.bindPopup('Walk to destination');
+      }
+    }
+
+    const bounds = tripLayer.getBounds();
+    if (bounds.isValid()) {
+      mapInstance.fitBounds(bounds, { padding: [50, 50] });
+    } else {
+      if (userLocation) {
+        mapInstance.setView([userLocation.lat, userLocation.lng], 14);
+      }
+    }
+    showToast('Trip shown on map', 'success');
+  } catch (e) {
+    console.error('Error drawing trip:', e);
+    showToast('Error showing trip on map: ' + e.message, 'error');
   }
 }
 
-// ============ PLAN MY TRIP (FIXED WITH LOGS) ============
+// ============ PLAN MY TRIP ============
 function openPlanTrip() {
   planTripModal.classList.remove('hidden');
   tripResults.innerHTML = '';
@@ -882,7 +908,7 @@ window.addEventListener('error', function(e) {
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v10.5 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
+  console.log(`🚌 Tunis Bus Live v10.6 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
   initPWA();
   loadLanguage();
   if (langSwitcher) langSwitcher.addEventListener('change', function() { setLanguage(this.value); });
