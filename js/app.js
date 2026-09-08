@@ -1,7 +1,5 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – COMPLETE FINAL v10.2
-// Map picker fix – now always works
-// All features: tracking, admin, feedback, nearby stops, multi‑bus BFS
+// 🚌 TUNIS BUS LIVE – v10.4 (WITH CONSOLE VIEWER)
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap, focusOnBus } from './map.js';
@@ -553,7 +551,7 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
   }
 }
 
-// ============ PLAN MY TRIP (FIXED) ============
+// ============ PLAN MY TRIP (FIXED WITH LOGS) ============
 function openPlanTrip() {
   planTripModal.classList.remove('hidden');
   tripResults.innerHTML = '';
@@ -618,27 +616,39 @@ function findNearestStopFromCoords(lat, lng) {
 }
 
 async function planTrip() {
+  console.log('🚀 planTrip() called');
+  const destInput = destinationInput.value.trim();
+  console.log('📝 Destination input:', destInput);
+
   let destStop = selectedDestinationStop || window._selectedDestinationStop;
-  let destQuery = destinationInput.value.trim();
+  console.log('🗺️ Stored destination stop:', destStop);
 
   if (!destStop) {
-    if (!destQuery) {
+    if (!destInput) {
       showToast('Please enter a destination or tap the map.', 'warning');
       return;
     }
     const stopMap = buildStopGraph();
     const allStops = Array.from(stopMap.values());
-    const matchedStops = allStops.filter(s => s.name.toLowerCase().includes(destQuery.toLowerCase()));
+    const matchedStops = allStops.filter(s => s.name.toLowerCase().includes(destInput.toLowerCase()));
+    console.log('🔍 Matched stops by name:', matchedStops);
     if (matchedStops.length === 0) {
       tripResults.innerHTML = `
-        <p style="color:red;">❌ No stops found matching "${destQuery}". Try another name or tap the map.</p>
+        <p style="color:red;">❌ No stops found matching "${destInput}". Try another name or tap the map.</p>
       `;
       return;
     }
     destStop = matchedStops[0];
+    console.log('🎯 Using first matched stop:', destStop);
   }
 
-  // Now we have a destination stop
+  if (!destStop) {
+    tripResults.innerHTML = `
+      <p style="color:red;">❌ Could not determine destination. Please enter a valid stop or tap the map.</p>
+    `;
+    return;
+  }
+
   const stopMap = buildStopGraph();
   const allStops = Array.from(stopMap.values());
   let userStop = null;
@@ -653,8 +663,8 @@ async function planTrip() {
         userStop = stop;
       }
     });
+    console.log('📍 User stop (auto):', userStop);
   } else {
-    // manual selection fallback
     tripResults.innerHTML = `
       <p style="color:orange;">⚠️ Could not detect your location. Please select your current stop:</p>
       <div style="max-height:150px;overflow-y:auto;margin-top:5px;">
@@ -679,14 +689,27 @@ async function planTrip() {
     return;
   }
 
+  if (!userStop) {
+    tripResults.innerHTML = `
+      <p style="color:red;">❌ Could not determine your current stop. Please enable GPS or select manually.</p>
+    `;
+    return;
+  }
+
   findRoutesAndDisplay(userStop, destStop);
 }
 
 function findRoutesAndDisplay(fromStop, toStop) {
+  console.log('🔍 findRoutesAndDisplay called');
+  console.log('📍 From:', fromStop);
+  console.log('📍 To:', toStop);
+
   const destLocation = { lat: toStop.lat, lng: toStop.lng };
   const userLocation = userLocationForTrip;
 
   const routePaths = findMultiBusRoutes(fromStop, toStop, 5);
+  console.log('🚌 Route paths found:', routePaths);
+
   if (routePaths.length === 0) {
     tripResults.innerHTML = `
       <div style="background:#fff3cd;padding:10px;border-radius:8px;">
@@ -699,6 +722,7 @@ function findRoutesAndDisplay(fromStop, toStop) {
 
   const bestPath = routePaths[0];
   const instructions = generateTripInstructions(bestPath, userLocation, destLocation);
+  console.log('📋 Instructions:', instructions);
 
   let html = `<div style="background:#d4edda;padding:10px;border-radius:8px;margin-bottom:12px;">
     <p>✅ <strong>Route found!</strong> Follow these steps:</p>
@@ -728,8 +752,112 @@ function findRoutesAndDisplay(fromStop, toStop) {
   window.drawTripOnMap = drawTripOnMap;
 }
 
+// ============ CONSOLE VIEWER (Phone Debug) ============
+function addConsoleViewer() {
+  const panel = document.createElement('div');
+  panel.id = 'consolePanel';
+  panel.style.cssText = `
+    position: fixed;
+    bottom: 60px;
+    right: 10px;
+    width: 90%;
+    max-width: 400px;
+    max-height: 200px;
+    background: rgba(0,0,0,0.9);
+    color: #0f0;
+    font-size: 11px;
+    font-family: monospace;
+    padding: 8px;
+    border-radius: 8px;
+    overflow-y: auto;
+    z-index: 999999;
+    display: none;
+    pointer-events: auto;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  `;
+  document.body.appendChild(panel);
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.textContent = '🐞';
+  toggleBtn.style.cssText = `
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
+    z-index: 999999;
+    background: #0d2b45;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    font-size: 20px;
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+    pointer-events: auto;
+  `;
+  document.body.appendChild(toggleBtn);
+
+  let logs = [];
+
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+
+  console.log = function(...args) {
+    logs.push({ level: 'log', msg: args.join(' ') });
+    if (logs.length > 50) logs.shift();
+    updatePanel();
+    originalLog.apply(console, args);
+  };
+  console.warn = function(...args) {
+    logs.push({ level: 'warn', msg: args.join(' ') });
+    if (logs.length > 50) logs.shift();
+    updatePanel();
+    originalWarn.apply(console, args);
+  };
+  console.error = function(...args) {
+    logs.push({ level: 'error', msg: args.join(' ') });
+    if (logs.length > 50) logs.shift();
+    updatePanel();
+    originalError.apply(console, args);
+  };
+
+  function updatePanel() {
+    const content = logs.map(log => {
+      const color = log.level === 'warn' ? '#ffa500' : log.level === 'error' ? '#ff4444' : '#0f0';
+      return `<div style="color:${color};">${log.msg}</div>`;
+    }).join('');
+    panel.innerHTML = content;
+    const clear = document.createElement('button');
+    clear.textContent = 'Clear';
+    clear.style.cssText = `
+      position: sticky;
+      top: 0;
+      float: right;
+      background: #e74c3c;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 10px;
+      cursor: pointer;
+      z-index: 1;
+    `;
+    clear.onclick = function() { logs = []; updatePanel(); };
+    panel.prepend(clear);
+  }
+
+  let visible = false;
+  toggleBtn.onclick = function() {
+    visible = !visible;
+    panel.style.display = visible ? 'block' : 'none';
+    if (visible) updatePanel();
+  };
+}
+
 // ============ ERROR LOGGING ============
 window.addEventListener('error', function(e) {
+  console.error('Global error:', e);
   try {
     firebase.database().ref('errors').push({
       message: e.message,
@@ -742,7 +870,7 @@ window.addEventListener('error', function(e) {
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v10.2 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
+  console.log(`🚌 Tunis Bus Live v10.4 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
   initPWA();
   loadLanguage();
   if (langSwitcher) langSwitcher.addEventListener('change', function() { setLanguage(this.value); });
@@ -820,6 +948,10 @@ async function init() {
       { timeout: 5000, enableHighAccuracy: false }
     );
   }
+
+  // Add console viewer after everything is ready
+  addConsoleViewer();
+
   console.log('✅ App ready');
 }
 
