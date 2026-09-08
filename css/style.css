@@ -562,3 +562,29 @@ input:focus, select:focus {
 .stop-select-item:hover {
   background: #f0f0f0;
 }
+/* Trip planner steps */
+.trip-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+}
+.trip-step .step-icon {
+  font-size: 1.2rem;
+  min-width: 24px;
+}
+.trip-step .step-details {
+  flex: 1;
+}
+.trip-step .step-title {
+  font-weight: bold;
+}
+.trip-step .step-sub {
+  font-size: 0.8rem;
+  color: #666;
+}
+.trip-step .step-meta {
+  font-size: 0.75rem;
+  color: #999;
+}
