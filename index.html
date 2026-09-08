@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="css/style.css?v=15">
+  <link rel="stylesheet" href="css/style.css?v=16">
   <script src="https://unpkg.com/@capacitor/core@latest/dist/capacitor.js"></script>
 </head>
 <body>
@@ -148,12 +148,17 @@
       </div>
     </div>
 
-    <!-- PLAN TRIP MODAL -->
+    <!-- PLAN TRIP MODAL (with Map Picker) -->
     <div id="planTripModal" class="modal hidden">
       <div class="modal-content" style="max-width:500px;">
         <h3><i class="fas fa-route"></i> Plan My Trip</h3>
-        <p style="font-size:0.85rem;color:#666;">Enter your destination. We'll find the best bus route from your location.</p>
-        <input type="text" id="destinationInput" placeholder="Where are you going? (e.g., Tunis Centre, Lac 2)" style="width:100%;padding:10px;margin:10px 0;border:2px solid #ddd;border-radius:8px;">
+        <p style="font-size:0.85rem;color:#666;">Enter your destination or tap the map to select a place.</p>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <input type="text" id="destinationInput" placeholder="Where are you going? (e.g., Lac 2, Bardo, ...)" style="flex:1;padding:10px;border:2px solid #ddd;border-radius:8px;">
+          <button id="pickDestinationMap" class="btn btn-secondary" style="width:auto;padding:10px 16px;">
+            <i class="fas fa-map-pin"></i> Map
+          </button>
+        </div>
         <button id="searchTripBtn" class="btn btn-primary" style="width:auto;padding:8px 16px;"><i class="fas fa-search"></i> Find Bus</button>
         <div id="tripResults" style="margin-top:10px;max-height:250px;overflow-y:auto;"></div>
         <button id="closePlanTrip" class="btn btn-secondary" style="width:auto;padding:8px 16px;margin-top:8px;">Close</button>
@@ -205,9 +210,9 @@
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
-  <script src="js/firebase-config.js?v=15"></script>
-  <script src="js/routes.js?v=15"></script>
-  <script type="module" src="js/app.js?v=15"></script>
+  <script src="js/firebase-config.js?v=16"></script>
+  <script src="js/routes.js?v=16"></script>
+  <script type="module" src="js/app.js?v=16"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
