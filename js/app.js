@@ -1,7 +1,7 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – COMPLETE FINAL VERSION v10.0
-// Multi‑bus BFS trip planner | Walking directions | Map visualization
-// All features integrated – no placeholders
+// 🚌 TUNIS BUS LIVE – COMPLETE FINAL v10.2
+// Map picker fix – now always works
+// All features: tracking, admin, feedback, nearby stops, multi‑bus BFS
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap, focusOnBus } from './map.js';
@@ -43,6 +43,7 @@ let destinationSelectionMode = false;
 let destinationSelectionCallback = null;
 let userLocationMarker = null;
 let tripLayer = null;
+let selectedDestinationStop = null;
 
 const isNative = window.Capacitor && Capacitor.isNative;
 
@@ -164,7 +165,6 @@ const tripResults = $('tripResults');
 const closePlanTrip = $('closePlanTrip');
 const pickDestinationMap = $('pickDestinationMap');
 
-// Full Screen Bus View
 const fullscreenOverlay = $('fullscreenBusView');
 const fullscreenMapContainer = $('fullscreenMapContainer');
 const fsBusTitle = $('fsBusTitle');
@@ -196,8 +196,8 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 function getCurrentPosition() {
   return new Promise((resolve, reject) => {
@@ -400,17 +400,13 @@ function buildStopGraph() {
 // ============ MULTI‑BUS BFS ============
 function findMultiBusRoutes(fromStop, toStop, maxTransfers = 5) {
   const stopMap = buildStopGraph();
-  const allStops = Array.from(stopMap.values());
-
   if (fromStop.lat === toStop.lat && fromStop.lng === toStop.lng) {
     return [{ legs: [] }];
   }
-
   const queue = [];
   const visited = new Set();
   visited.add(`${fromStop.lat},${fromStop.lng}`);
   queue.push({ stop: fromStop, path: [] });
-
   while (queue.length > 0) {
     const { stop, path } = queue.shift();
     if (stop.lat === toStop.lat && stop.lng === toStop.lng) {
@@ -514,7 +510,6 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
   }
   tripLayer = L.layerGroup().addTo(mapInstance);
 
-  // Walking to first stop
   if (userLocation && routePath.legs && routePath.legs.length > 0) {
     const firstStop = routePath.legs[0].fromStop;
     if (firstStop) {
@@ -525,8 +520,6 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
       walkLine.bindPopup('Walk to stop');
     }
   }
-
-  // Bus legs
   if (routePath.legs) {
     routePath.legs.forEach((leg, idx) => {
       const route = routeData.find(r => r.id === leg.routeId);
@@ -544,8 +537,6 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
       line.bindPopup(`🚌 ${leg.routeId}`);
     });
   }
-
-  // Walking to destination
   if (destinationLocation && routePath.legs && routePath.legs.length > 0) {
     const lastStop = routePath.legs[routePath.legs.length - 1].toStop;
     if (lastStop) {
@@ -556,18 +547,19 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
       walkLine.bindPopup('Walk to destination');
     }
   }
-
   const bounds = tripLayer.getBounds();
   if (bounds.isValid()) {
     mapInstance.fitBounds(bounds, { padding: [50, 50] });
   }
 }
 
-// ============ PLAN MY TRIP ============
+// ============ PLAN MY TRIP (FIXED) ============
 function openPlanTrip() {
   planTripModal.classList.remove('hidden');
   tripResults.innerHTML = '';
   destinationInput.value = '';
+  selectedDestinationStop = null;
+  window._selectedDestinationStop = null;
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       pos => {
@@ -594,13 +586,14 @@ function startDestinationMapPicker() {
     const lng = e.latlng.lng;
     const nearest = findNearestStopFromCoords(lat, lng);
     if (nearest) {
+      selectedDestinationStop = nearest;
+      window._selectedDestinationStop = nearest;
       destinationInput.value = nearest.name;
       destinationSelectionMode = false;
       mapInstance.off('click', destinationSelectionCallback);
       destinationSelectionCallback = null;
       planTripModal.classList.remove('hidden');
       showToast(`✅ Selected: ${nearest.name}`, 'success');
-      window._destLocation = { lat, lng, name: nearest.name };
       setTimeout(planTrip, 300);
     } else {
       showToast('No stop found near that location. Try again.', 'warning');
@@ -625,22 +618,32 @@ function findNearestStopFromCoords(lat, lng) {
 }
 
 async function planTrip() {
-  const destQuery = destinationInput.value.trim();
-  if (!destQuery) {
-    showToast('Please enter a destination or tap the map.', 'warning');
-    return;
+  let destStop = selectedDestinationStop || window._selectedDestinationStop;
+  let destQuery = destinationInput.value.trim();
+
+  if (!destStop) {
+    if (!destQuery) {
+      showToast('Please enter a destination or tap the map.', 'warning');
+      return;
+    }
+    const stopMap = buildStopGraph();
+    const allStops = Array.from(stopMap.values());
+    const matchedStops = allStops.filter(s => s.name.toLowerCase().includes(destQuery.toLowerCase()));
+    if (matchedStops.length === 0) {
+      tripResults.innerHTML = `
+        <p style="color:red;">❌ No stops found matching "${destQuery}". Try another name or tap the map.</p>
+      `;
+      return;
+    }
+    destStop = matchedStops[0];
   }
+
+  // Now we have a destination stop
   const stopMap = buildStopGraph();
   const allStops = Array.from(stopMap.values());
-  const matchedStops = allStops.filter(s => s.name.toLowerCase().includes(destQuery.toLowerCase()));
-  if (matchedStops.length === 0) {
-    tripResults.innerHTML = `
-      <p style="color:red;">❌ No stops found matching "${destQuery}". Try another name or tap the map.</p>
-    `;
-    return;
-  }
   let userStop = null;
   let userLocation = userLocationForTrip;
+
   if (userLocation) {
     let minDist = Infinity;
     allStops.forEach(stop => {
@@ -651,6 +654,7 @@ async function planTrip() {
       }
     });
   } else {
+    // manual selection fallback
     tripResults.innerHTML = `
       <p style="color:orange;">⚠️ Could not detect your location. Please select your current stop:</p>
       <div style="max-height:150px;overflow-y:auto;margin-top:5px;">
@@ -668,18 +672,20 @@ async function planTrip() {
         if (stop) {
           userStop = stop;
           userLocation = { lat, lng };
-          findRoutesAndDisplay(userStop, matchedStops[0]);
+          findRoutesAndDisplay(userStop, destStop);
         }
       });
     });
     return;
   }
-  findRoutesAndDisplay(userStop, matchedStops[0]);
+
+  findRoutesAndDisplay(userStop, destStop);
 }
 
 function findRoutesAndDisplay(fromStop, toStop) {
-  const destLocation = window._destLocation || null;
+  const destLocation = { lat: toStop.lat, lng: toStop.lng };
   const userLocation = userLocationForTrip;
+
   const routePaths = findMultiBusRoutes(fromStop, toStop, 5);
   if (routePaths.length === 0) {
     tripResults.innerHTML = `
@@ -690,11 +696,14 @@ function findRoutesAndDisplay(fromStop, toStop) {
     `;
     return;
   }
+
   const bestPath = routePaths[0];
   const instructions = generateTripInstructions(bestPath, userLocation, destLocation);
+
   let html = `<div style="background:#d4edda;padding:10px;border-radius:8px;margin-bottom:12px;">
     <p>✅ <strong>Route found!</strong> Follow these steps:</p>
   </div>`;
+
   instructions.forEach((step, idx) => {
     const icon = step.type === 'walk' ? '🚶' : '🚌';
     html += `
@@ -708,11 +717,13 @@ function findRoutesAndDisplay(fromStop, toStop) {
       </div>
     `;
   });
+
   html += `
-    <button class="btn btn-primary" style="width:auto;padding:8px 16px;margin-top:10px;" onclick="drawTripOnMap(${JSON.stringify(bestPath).replace(/"/g, '&quot;')}, ${userLocation ? JSON.stringify(userLocation).replace(/"/g, '&quot;') : 'null'}, ${destLocation ? JSON.stringify(destLocation).replace(/"/g, '&quot;') : 'null'}); planTripModal.classList.add('hidden');">
+    <button class="btn btn-primary" style="width:auto;padding:8px 16px;margin-top:10px;" onclick="drawTripOnMap(${JSON.stringify(bestPath).replace(/"/g, '&quot;')}, ${userLocation ? JSON.stringify(userLocation).replace(/"/g, '&quot;') : 'null'}, ${JSON.stringify(destLocation).replace(/"/g, '&quot;')}); planTripModal.classList.add('hidden');">
       <i class="fas fa-map"></i> Show on map
     </button>
   `;
+
   tripResults.innerHTML = html;
   window.drawTripOnMap = drawTripOnMap;
 }
@@ -731,7 +742,7 @@ window.addEventListener('error', function(e) {
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v10.0 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
+  console.log(`🚌 Tunis Bus Live v10.2 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
   initPWA();
   loadLanguage();
   if (langSwitcher) langSwitcher.addEventListener('change', function() { setLanguage(this.value); });
@@ -1075,6 +1086,8 @@ function isNearRoute(route, lat, lng) {
 function setupPassengerUI() {
   btnCloseDetail.addEventListener('click', () => routeDetailPanel.classList.add('hidden'));
 }
+
+// ============ FAVORITES ============
 function setupFavorites() {
   if (favoriteBtn) {
     favoriteBtn.addEventListener('click', async () => {
