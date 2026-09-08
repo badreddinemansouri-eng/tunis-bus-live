@@ -1,5 +1,5 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – v10.7 (getBounds Fixed)
+// 🚌 TUNIS BUS LIVE – v11.0 (Intelligent Dijkstra Router)
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap, focusOnBus } from './map.js';
@@ -13,6 +13,9 @@ const REMOVE_THRESHOLD = 10 * 60 * 1000;
 const AUTO_END_TIMEOUT = 5 * 60;
 const CLEANUP_INTERVAL = 30000;
 const WALK_SPEED_KMH = 5;
+const BUS_SPEED_KMH = 15;           // Average city bus speed
+const WAITING_TIME_MIN = 5;         // Average wait time per bus
+const TRANSFER_WALK_RADIUS_KM = 0.8; // Walk up to 800m to transfer
 
 // ============ STATE ============
 let currentView = 'passenger';
@@ -206,6 +209,40 @@ function getCurrentPosition() {
   });
 }
 
+// ============ MIN HEAP FOR DIJKSTRA ============
+class MinHeap {
+  constructor() { this.heap = []; }
+  push(val) { this.heap.push(val); this._siftUp(this.heap.length - 1); }
+  pop() {
+    if (this.heap.length === 0) return null;
+    this._swap(0, this.heap.length - 1);
+    const top = this.heap.pop();
+    this._siftDown(0);
+    return top;
+  }
+  isEmpty() { return this.heap.length === 0; }
+  _siftUp(i) {
+    while (i > 0) {
+      const p = Math.floor((i - 1) / 2);
+      if (this.heap[p].dist <= this.heap[i].dist) break;
+      this._swap(i, p);
+      i = p;
+    }
+  }
+  _siftDown(i) {
+    const n = this.heap.length;
+    while (true) {
+      let l = 2 * i + 1, r = 2 * i + 2, smallest = i;
+      if (l < n && this.heap[l].dist < this.heap[smallest].dist) smallest = l;
+      if (r < n && this.heap[r].dist < this.heap[smallest].dist) smallest = r;
+      if (smallest === i) break;
+      this._swap(i, smallest);
+      i = smallest;
+    }
+  }
+  _swap(i, j) { [this.heap[i], this.heap[j]] = [this.heap[j], this.heap[i]]; }
+}
+
 // ============ ADMIN DASHBOARD ============
 async function updateAdminStats() {
   try {
@@ -395,60 +432,130 @@ function buildStopGraph() {
   return stopMap;
 }
 
-// ============ MULTI‑BUS BFS ============
-function findMultiBusRoutes(fromStop, toStop, maxTransfers = 5) {
+// ============================================================
+// 🧠 INTELLIGENT DIJKSTRA ROUTER (Mixes Bus + Walking)
+// ============================================================
+function findSmartRoutes(fromStop, toStop) {
+  console.log('🧠 Running intelligent Dijkstra router...');
   const stopMap = buildStopGraph();
-  const fromKey = `${fromStop.lat},${fromStop.lng}`;
-  const toKey = `${toStop.lat},${toStop.lng}`;
+  const allKeys = Array.from(stopMap.keys());
+  const keyToIndex = new Map();
+  allKeys.forEach((k, i) => keyToIndex.set(k, i));
 
-  if (fromKey === toKey) {
-    return [{ legs: [] }];
-  }
+  // Build adjacency list
+  const adj = new Map();
+  allKeys.forEach(k => adj.set(k, []));
 
-  const queue = [];
-  const visited = new Set();
-  visited.add(fromKey);
-  queue.push({ stopKey: fromKey, path: [] });
-
-  while (queue.length > 0) {
-    const { stopKey, path } = queue.shift();
-    const stop = stopMap.get(stopKey);
-    if (!stop) continue;
-
-    if (stopKey === toKey) {
-      return [{ legs: path }];
+  // 1. Bus edges (connect consecutive stops on the same route)
+  routeData.forEach(route => {
+    const stops = route.stops;
+    for (let i = 0; i < stops.length - 1; i++) {
+      const s1 = stops[i];
+      const s2 = stops[i + 1];
+      const k1 = `${s1.lat},${s1.lng}`;
+      const k2 = `${s2.lat},${s2.lng}`;
+      const dist = haversineDistance(s1.lat, s1.lng, s2.lat, s2.lng);
+      const time = (dist / BUS_SPEED_KMH) * 60; // minutes
+      const waitCost = WAITING_TIME_MIN; // waiting for the bus
+      adj.get(k1).push({ toKey: k2, weight: time + waitCost, type: 'bus', routeId: route.id, fromStop: s1, toStop: s2 });
+      adj.get(k2).push({ toKey: k1, weight: time + waitCost, type: 'bus', routeId: route.id, fromStop: s2, toStop: s1 });
     }
+  });
 
-    const routesFromStop = stop.routes;
-    for (const routeId of routesFromStop) {
-      const route = routeData.find(r => r.id === routeId);
-      if (!route) continue;
-      const stopsOnRoute = route.stops;
-      for (const nextStop of stopsOnRoute) {
-        const nextKey = `${nextStop.lat},${nextStop.lng}`;
-        if (visited.has(nextKey)) continue;
-        if (nextKey === stopKey) continue;
-        visited.add(nextKey);
-        const fullNextStop = stopMap.get(nextKey);
-        if (!fullNextStop) continue;
-        const newPath = [...path, {
-          type: 'bus',
-          routeId: routeId,
-          fromStop: stop,
-          toStop: fullNextStop
-        }];
-        if (newPath.length > maxTransfers) continue;
-        queue.push({ stopKey: nextKey, path: newPath });
+  // 2. Walking edges (connect stops within TRANSFER_WALK_RADIUS_KM)
+  for (let i = 0; i < allKeys.length; i++) {
+    for (let j = i + 1; j < allKeys.length; j++) {
+      const k1 = allKeys[i];
+      const k2 = allKeys[j];
+      const s1 = stopMap.get(k1);
+      const s2 = stopMap.get(k2);
+      const dist = haversineDistance(s1.lat, s1.lng, s2.lat, s2.lng);
+      if (dist < TRANSFER_WALK_RADIUS_KM) {
+        const time = (dist / WALK_SPEED_KMH) * 60;
+        adj.get(k1).push({ toKey: k2, weight: time, type: 'walk', fromStop: s1, toStop: s2, distance: dist });
+        adj.get(k2).push({ toKey: k1, weight: time, type: 'walk', fromStop: s2, toStop: s1, distance: dist });
       }
     }
   }
-  return [];
+
+  // 3. Dijkstra
+  const startKey = `${fromStop.lat},${fromStop.lng}`;
+  const endKey = `${toStop.lat},${toStop.lng}`;
+  const distMap = new Map();
+  const prevMap = new Map();
+  const prevEdgeMap = new Map();
+  allKeys.forEach(k => distMap.set(k, Infinity));
+  distMap.set(startKey, 0);
+
+  const pq = new MinHeap();
+  pq.push({ key: startKey, dist: 0 });
+
+  while (!pq.isEmpty()) {
+    const { key, dist } = pq.pop();
+    if (key === endKey) break;
+    if (dist > distMap.get(key)) continue;
+
+    for (const edge of adj.get(key) || []) {
+      const candidateDist = dist + edge.weight;
+      if (candidateDist < distMap.get(edge.toKey)) {
+        distMap.set(edge.toKey, candidateDist);
+        prevMap.set(edge.toKey, key);
+        prevEdgeMap.set(edge.toKey, edge);
+        pq.push({ key: edge.toKey, dist: candidateDist });
+      }
+    }
+  }
+
+  // 4. Reconstruct path
+  if (!prevMap.has(endKey) && startKey !== endKey) {
+    console.log('❌ No path found');
+    return null;
+  }
+
+  const path = [];
+  let currentKey = endKey;
+  while (currentKey !== startKey) {
+    const edge = prevEdgeMap.get(currentKey);
+    if (!edge) break;
+    path.unshift(edge);
+    currentKey = prevMap.get(currentKey);
+  }
+
+  // Calculate total walking distance
+  let totalWalkDist = 0;
+  path.forEach(edge => {
+    if (edge.type === 'walk' && edge.distance) totalWalkDist += edge.distance;
+  });
+
+  const totalTime = distMap.get(endKey);
+
+  // Merge consecutive bus legs with the same routeId
+  const mergedPath = [];
+  for (const edge of path) {
+    if (edge.type === 'walk') {
+      mergedPath.push(edge);
+    } else { // bus
+      const last = mergedPath[mergedPath.length - 1];
+      if (last && last.type === 'bus' && last.routeId === edge.routeId && last.toStop === edge.fromStop) {
+        // Extend the last bus leg
+        last.toStop = edge.toStop;
+      } else {
+        mergedPath.push({ ...edge });
+      }
+    }
+  }
+
+  return {
+    path: mergedPath,
+    totalTime: Math.round(totalTime),
+    totalWalkDist: Math.round(totalWalkDist * 1000) // in meters
+  };
 }
 
 // ============ GENERATE TRIP INSTRUCTIONS ============
 function generateTripInstructions(routePath, userLocation, destinationLocation) {
   let steps = [];
-  if (!routePath.legs || routePath.legs.length === 0) {
+  if (!routePath || routePath.length === 0) {
     if (userLocation && destinationLocation) {
       const dist = haversineDistance(userLocation.lat, userLocation.lng, destinationLocation.lat, destinationLocation.lng);
       const walkTime = dist / WALK_SPEED_KMH * 60;
@@ -463,53 +570,59 @@ function generateTripInstructions(routePath, userLocation, destinationLocation) 
     }
     return steps;
   }
-  const firstStop = routePath.legs[0].fromStop;
-  if (userLocation) {
-    const dist = haversineDistance(userLocation.lat, userLocation.lng, firstStop.lat, firstStop.lng);
-    const walkTime = dist / WALK_SPEED_KMH * 60;
-    steps.push({
-      type: 'walk',
-      from: userLocation,
-      to: firstStop,
-      distance: dist,
-      time: walkTime,
-      instruction: `Walk to ${firstStop.name} (${Math.round(dist*1000)}m, ~${Math.round(walkTime)} min)`
-    });
-  }
-  routePath.legs.forEach((leg, idx) => {
-    const route = routeData.find(r => r.id === leg.routeId);
-    if (!route) return;
-    const dir = 'forward';
-    const dirLabel = dir === 'forward' ? 'Aller' : 'Retour';
-    steps.push({
-      type: 'bus',
-      routeId: leg.routeId,
-      routeName: route.name,
-      direction: dir,
-      fromStop: leg.fromStop,
-      toStop: leg.toStop,
-      instruction: `🚌 Take ${leg.routeId} (${dirLabel}) from ${leg.fromStop.name} to ${leg.toStop.name}`
-    });
-  });
-  const lastStop = routePath.legs[routePath.legs.length - 1].toStop;
-  if (destinationLocation) {
-    const dist = haversineDistance(lastStop.lat, lastStop.lng, destinationLocation.lat, destinationLocation.lng);
-    const walkTime = dist / WALK_SPEED_KMH * 60;
-    if (dist > 0.05) {
+
+  let prevStop = null;
+  routePath.forEach((edge, idx) => {
+    if (edge.type === 'walk') {
+      const dist = edge.distance || haversineDistance(edge.fromStop.lat, edge.fromStop.lng, edge.toStop.lat, edge.toStop.lng);
+      const walkTime = (dist / WALK_SPEED_KMH) * 60;
       steps.push({
         type: 'walk',
-        from: lastStop,
-        to: destinationLocation,
+        from: edge.fromStop,
+        to: edge.toStop,
         distance: dist,
         time: walkTime,
-        instruction: `Walk to your destination (${Math.round(dist*1000)}m, ~${Math.round(walkTime)} min)`
+        instruction: `🚶 Walk ${Math.round(dist*1000)}m to ${edge.toStop.name} (~${Math.round(walkTime)} min)`
+      });
+    } else if (edge.type === 'bus') {
+      const route = routeData.find(r => r.id === edge.routeId);
+      const dirLabel = 'Aller'; // we don't store direction in the edge, but we can infer or just show route name
+      steps.push({
+        type: 'bus',
+        routeId: edge.routeId,
+        routeName: route ? route.name : edge.routeId,
+        direction: 'forward',
+        fromStop: edge.fromStop,
+        toStop: edge.toStop,
+        instruction: `🚌 Take ${edge.routeId} from ${edge.fromStop.name} to ${edge.toStop.name}`
       });
     }
+  });
+
+  // Final walk to destination if needed
+  if (destinationLocation && routePath.length > 0) {
+    const lastEdge = routePath[routePath.length - 1];
+    const lastStop = lastEdge.toStop;
+    if (lastStop && destinationLocation) {
+      const dist = haversineDistance(lastStop.lat, lastStop.lng, destinationLocation.lat, destinationLocation.lng);
+      if (dist > 0.05) {
+        const walkTime = dist / WALK_SPEED_KMH * 60;
+        steps.push({
+          type: 'walk',
+          from: lastStop,
+          to: destinationLocation,
+          distance: dist,
+          time: walkTime,
+          instruction: `🚶 Walk to your destination (${Math.round(dist*1000)}m, ~${Math.round(walkTime)} min)`
+        });
+      }
+    }
   }
+
   return steps;
 }
 
-// ============ DRAW TRIP ON MAP (FIXED getBounds) ============
+// ============ DRAW TRIP ON MAP ============
 function drawTripOnMap(routePath, userLocation, destinationLocation) {
   try {
     console.log('🗺️ drawTripOnMap called');
@@ -519,8 +632,8 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
       showToast('Map not ready. Please refresh.', 'error');
       return;
     }
-    if (!routePath || !routePath.legs) {
-      console.error('Invalid routePath:', routePath);
+    if (!routePath || routePath.length === 0) {
+      console.error('Invalid routePath');
       showToast('Invalid route data. Try again.', 'error');
       return;
     }
@@ -530,26 +643,20 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
     }
     tripLayer = L.layerGroup().addTo(mapInstance);
 
-    // Walking to first stop
-    if (userLocation && routePath.legs.length > 0) {
-      const firstStop = routePath.legs[0].fromStop;
-      if (firstStop && firstStop.lat && firstStop.lng) {
+    // Draw each leg
+    routePath.forEach((edge, idx) => {
+      if (edge.type === 'walk') {
         const walkLine = L.polyline([
-          [userLocation.lat, userLocation.lng],
-          [firstStop.lat, firstStop.lng]
+          [edge.fromStop.lat, edge.fromStop.lng],
+          [edge.toStop.lat, edge.toStop.lng]
         ], { color: '#9E9E9E', weight: 3, dashArray: '5,5' }).addTo(tripLayer);
-        walkLine.bindPopup('Walk to stop');
-      }
-    }
-
-    // Bus legs
-    if (routePath.legs) {
-      routePath.legs.forEach((leg, idx) => {
-        const route = routeData.find(r => r.id === leg.routeId);
+        walkLine.bindPopup(`🚶 Walk to ${edge.toStop.name}`);
+      } else if (edge.type === 'bus') {
+        const route = routeData.find(r => r.id === edge.routeId);
         if (!route) return;
         const allStops = route.stops;
-        const fromIdx = allStops.findIndex(s => s.lat === leg.fromStop.lat && s.lng === leg.fromStop.lng);
-        const toIdx = allStops.findIndex(s => s.lat === leg.toStop.lat && s.lng === leg.toStop.lng);
+        const fromIdx = allStops.findIndex(s => s.lat === edge.fromStop.lat && s.lng === edge.fromStop.lng);
+        const toIdx = allStops.findIndex(s => s.lat === edge.toStop.lat && s.lng === edge.toStop.lng);
         if (fromIdx === -1 || toIdx === -1) return;
         const start = Math.min(fromIdx, toIdx);
         const end = Math.max(fromIdx, toIdx);
@@ -557,23 +664,11 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
         const colors = ['#2196F3', '#FF9800', '#4CAF50', '#9C27B0', '#F44336'];
         const color = colors[idx % colors.length];
         const line = L.polyline(segment, { color: color, weight: 5, opacity: 0.8 }).addTo(tripLayer);
-        line.bindPopup(`🚌 ${leg.routeId}`);
-      });
-    }
-
-    // Walking to destination
-    if (destinationLocation && routePath.legs && routePath.legs.length > 0) {
-      const lastStop = routePath.legs[routePath.legs.length - 1].toStop;
-      if (lastStop && lastStop.lat && lastStop.lng) {
-        const walkLine = L.polyline([
-          [lastStop.lat, lastStop.lng],
-          [destinationLocation.lat, destinationLocation.lng]
-        ], { color: '#9E9E9E', weight: 3, dashArray: '5,5' }).addTo(tripLayer);
-        walkLine.bindPopup('Walk to destination');
+        line.bindPopup(`🚌 ${edge.routeId}`);
       }
-    }
+    });
 
-    // === FIXED: Get bounds safely ===
+    // Fit bounds
     let bounds = null;
     try {
       if (typeof tripLayer.getBounds === 'function') {
@@ -596,7 +691,7 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
   }
 }
 
-// ============ PLAN MY TRIP ============
+// ============ PLAN MY TRIP (UPDATED) ============
 function openPlanTrip() {
   planTripModal.classList.remove('hidden');
   tripResults.innerHTML = '';
@@ -663,10 +758,8 @@ function findNearestStopFromCoords(lat, lng) {
 async function planTrip() {
   console.log('🚀 planTrip() called');
   const destInput = destinationInput.value.trim();
-  console.log('📝 Destination input:', destInput);
 
   let destStop = selectedDestinationStop || window._selectedDestinationStop;
-  console.log('🗺️ Stored destination stop:', destStop ? destStop.name : 'none');
 
   if (!destStop) {
     if (!destInput) {
@@ -676,7 +769,6 @@ async function planTrip() {
     const stopMap = buildStopGraph();
     const allStops = Array.from(stopMap.values());
     const matchedStops = allStops.filter(s => s.name.toLowerCase().includes(destInput.toLowerCase()));
-    console.log('🔍 Matched stops by name:', matchedStops.map(s => s.name));
     if (matchedStops.length === 0) {
       tripResults.innerHTML = `
         <p style="color:red;">❌ No stops found matching "${destInput}". Try another name or tap the map.</p>
@@ -684,13 +776,10 @@ async function planTrip() {
       return;
     }
     destStop = matchedStops[0];
-    console.log('🎯 Using first matched stop:', destStop.name);
   }
 
   if (!destStop) {
-    tripResults.innerHTML = `
-      <p style="color:red;">❌ Could not determine destination. Please enter a valid stop or tap the map.</p>
-    `;
+    tripResults.innerHTML = `<p style="color:red;">❌ Could not determine destination.</p>`;
     return;
   }
 
@@ -708,7 +797,6 @@ async function planTrip() {
         userStop = stop;
       }
     });
-    console.log('📍 User stop (auto):', userStop ? userStop.name : 'none');
   } else {
     tripResults.innerHTML = `
       <p style="color:orange;">⚠️ Could not detect your location. Please select your current stop:</p>
@@ -727,7 +815,7 @@ async function planTrip() {
         if (stop) {
           userStop = stop;
           userLocation = { lat, lng };
-          findRoutesAndDisplay(userStop, destStop);
+          executeSmartRoute(userStop, destStop, userLocation);
         }
       });
     });
@@ -735,27 +823,37 @@ async function planTrip() {
   }
 
   if (!userStop) {
-    tripResults.innerHTML = `
-      <p style="color:red;">❌ Could not determine your current stop. Please enable GPS or select manually.</p>
-    `;
+    tripResults.innerHTML = `<p style="color:red;">❌ Could not determine your current stop. Please enable GPS or select manually.</p>`;
     return;
   }
 
-  findRoutesAndDisplay(userStop, destStop);
+  executeSmartRoute(userStop, destStop, userLocation);
 }
 
-function findRoutesAndDisplay(fromStop, toStop) {
-  console.log('🔍 findRoutesAndDisplay called');
-  console.log('📍 From:', fromStop.name);
-  console.log('📍 To:', toStop.name);
+function executeSmartRoute(fromStop, toStop, userLocation) {
+  console.log('🔍 Executing Smart Route from', fromStop.name, 'to', toStop.name);
 
+  const result = findSmartRoutes(fromStop, toStop);
   const destLocation = { lat: toStop.lat, lng: toStop.lng };
-  const userLocation = userLocationForTrip;
 
-  const routePaths = findMultiBusRoutes(fromStop, toStop, 5);
-  console.log('🚌 Route paths found:', routePaths.length);
-
-  if (routePaths.length === 0) {
+  if (!result || result.path.length === 0) {
+    // No bus route found, offer walking if close
+    const dist = haversineDistance(fromStop.lat, fromStop.lng, toStop.lat, toStop.lng);
+    if (dist < 3) {
+      const walkTime = (dist / WALK_SPEED_KMH) * 60;
+      tripResults.innerHTML = `
+        <div style="background:#fff3cd;padding:10px;border-radius:8px;">
+          <p>🚶 No bus route found, but you can walk.</p>
+          <p><strong>Distance:</strong> ${Math.round(dist*1000)}m</p>
+          <p><strong>Time:</strong> ~${Math.round(walkTime)} min walking</p>
+          <button class="btn btn-primary" style="width:auto;padding:8px 16px;margin-top:10px;" onclick="drawTripOnMap([{type:'walk', fromStop: {lat:${fromStop.lat}, lng:${fromStop.lng}}, toStop: {lat:${toStop.lat}, lng:${toStop.lng}}}], {lat:${fromStop.lat}, lng:${fromStop.lng}}, {lat:${toStop.lat}, lng:${toStop.lng}}); planTripModal.classList.add('hidden');">
+            <i class="fas fa-map"></i> Show on map
+          </button>
+        </div>
+      `;
+      window.drawTripOnMap = drawTripOnMap;
+      return;
+    }
     tripResults.innerHTML = `
       <div style="background:#fff3cd;padding:10px;border-radius:8px;">
         <p>❌ No route found from <strong>${fromStop.name}</strong> to <strong>${toStop.name}</strong>.</p>
@@ -765,30 +863,38 @@ function findRoutesAndDisplay(fromStop, toStop) {
     return;
   }
 
-  const bestPath = routePaths[0];
-  const instructions = generateTripInstructions(bestPath, userLocation, destLocation);
-  console.log('📋 Instructions:', instructions.length);
+  // Generate instructions
+  const instructions = generateTripInstructions(result.path, userLocation, destLocation);
 
-  let html = `<div style="background:#d4edda;padding:10px;border-radius:8px;margin-bottom:12px;">
-    <p>✅ <strong>Route found!</strong> Follow these steps:</p>
-  </div>`;
+  let html = `
+    <div style="background:#d4edda;padding:12px;border-radius:8px;margin-bottom:12px;">
+      <p>✅ <strong>Smart Route Found!</strong></p>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.9rem;">
+        <span>⏱️ <strong>Total Time:</strong> ${result.totalTime} min</span>
+        <span>🚶 <strong>Walking:</strong> ${result.totalWalkDist}m</span>
+        <span>🚌 <strong>Transfers:</strong> ${instructions.filter(i => i.type === 'bus').length - 1}</span>
+      </div>
+    </div>
+    <div style="max-height:200px;overflow-y:auto;">
+  `;
 
   instructions.forEach((step, idx) => {
     const icon = step.type === 'walk' ? '🚶' : '🚌';
     html += `
-      <div class="trip-step">
-        <span class="step-icon">${icon}</span>
+      <div class="trip-step" style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid #f0f0f0;">
+        <span style="font-size:1.2rem;">${icon}</span>
         <div class="step-details">
-          <div class="step-title">${step.instruction}</div>
-          ${step.type === 'bus' ? `<div class="step-sub">${step.routeName}</div>` : ''}
-          ${step.distance ? `<div class="step-meta">${Math.round(step.distance*1000)}m · ~${Math.round(step.time)} min</div>` : ''}
+          <div class="step-title" style="font-size:0.9rem;">${step.instruction}</div>
+          ${step.distance ? `<div class="step-meta" style="font-size:0.75rem;color:#666;">${Math.round(step.distance*1000)}m · ~${Math.round(step.time)} min</div>` : ''}
         </div>
       </div>
     `;
   });
 
+  html += `</div>`;
+
   html += `
-    <button class="btn btn-primary" style="width:auto;padding:8px 16px;margin-top:10px;" onclick="drawTripOnMap(${JSON.stringify(bestPath).replace(/"/g, '&quot;')}, ${userLocation ? JSON.stringify(userLocation).replace(/"/g, '&quot;') : 'null'}, ${JSON.stringify(destLocation).replace(/"/g, '&quot;')}); planTripModal.classList.add('hidden');">
+    <button class="btn btn-primary" style="width:auto;padding:8px 16px;margin-top:10px;" onclick="drawTripOnMap(${JSON.stringify(result.path).replace(/"/g, '&quot;')}, ${userLocation ? JSON.stringify(userLocation).replace(/"/g, '&quot;') : 'null'}, ${JSON.stringify(destLocation).replace(/"/g, '&quot;')}); planTripModal.classList.add('hidden');">
       <i class="fas fa-map"></i> Show on map
     </button>
   `;
@@ -915,7 +1021,7 @@ window.addEventListener('error', function(e) {
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v10.7 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
+  console.log(`🚌 Tunis Bus Live v11.0 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
   initPWA();
   loadLanguage();
   if (langSwitcher) langSwitcher.addEventListener('change', function() { setLanguage(this.value); });
