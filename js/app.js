@@ -2,7 +2,7 @@
 // 🚌 TUNIS BUS LIVE – COMPLETE FINAL VERSION
 // Full-screen bus view | Auto-direction | Multi-language
 // Admin Dashboard | Feedback | Error Logging
-// Nearby Stops | Plan My Trip
+// Nearby Stops | Plan My Trip with Map Picker
 // Capacitor 4 + Background Geolocation
 // ============================================================
 
@@ -40,6 +40,8 @@ let fullscreenBusActive = false;
 let currentLang = 'en';
 let adminInterval = null;
 let userLocationForTrip = null;
+let destinationSelectionMode = false;
+let destinationSelectionCallback = null;
 
 const isNative = window.Capacitor && Capacitor.isNative;
 
@@ -159,6 +161,7 @@ const destinationInput = $('destinationInput');
 const searchTripBtn = $('searchTripBtn');
 const tripResults = $('tripResults');
 const closePlanTrip = $('closePlanTrip');
+const pickDestinationMap = $('pickDestinationMap');
 
 // Full Screen Bus View
 const fullscreenOverlay = $('fullscreenBusView');
@@ -355,7 +358,7 @@ function displayNearbyResults(stops) {
   nearbyModal.classList.remove('hidden');
 }
 
-// ============ PLAN MY TRIP ============
+// ============ PLAN MY TRIP (with Map Picker) ============
 function openPlanTrip() {
   planTripModal.classList.remove('hidden');
   tripResults.innerHTML = '';
@@ -364,7 +367,7 @@ function openPlanTrip() {
     navigator.geolocation.getCurrentPosition(
       pos => {
         userLocationForTrip = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        showToast('📍 Location detected! Enter your destination.', 'success');
+        showToast('📍 Location detected! Enter your destination or tap the map.', 'success');
       },
       err => {
         showToast('Could not get location. Please enter your starting stop manually.', 'warning');
@@ -374,10 +377,68 @@ function openPlanTrip() {
   }
 }
 
+// Destination Map Picker
+function startDestinationMapPicker() {
+  destinationSelectionMode = true;
+  planTripModal.classList.add('hidden');
+  showToast('📍 Tap on the map to select your destination.', 'info');
+  const mapInstance = getMap();
+  if (!mapInstance) return;
+  
+  // Store the callback
+  destinationSelectionCallback = function(e) {
+    const lat = e.latlng.lat;
+    const lng = e.latlng.lng;
+    const nearest = findNearestStopFromCoords(lat, lng);
+    if (nearest) {
+      destinationInput.value = nearest.name;
+      destinationSelectionMode = false;
+      mapInstance.off('click', destinationSelectionCallback);
+      destinationSelectionCallback = null;
+      planTripModal.classList.remove('hidden');
+      showToast(`✅ Selected: ${nearest.name}`, 'success');
+      setTimeout(planTrip, 300);
+    } else {
+      showToast('No stop found near that location. Try again.', 'warning');
+    }
+  };
+  
+  mapInstance.on('click', destinationSelectionCallback);
+}
+
+function findNearestStopFromCoords(lat, lng) {
+  const stopMap = new Map();
+  routeData.forEach(route => {
+    route.stops.forEach(stop => {
+      const key = `${stop.lat},${stop.lng}`;
+      if (!stopMap.has(key)) {
+        stopMap.set(key, {
+          name: stop.name,
+          lat: stop.lat,
+          lng: stop.lng,
+          routes: new Set()
+        });
+      }
+      stopMap.get(key).routes.add(route.id);
+    });
+  });
+  const uniqueStops = Array.from(stopMap.values());
+  let minDist = Infinity;
+  let nearest = null;
+  uniqueStops.forEach(stop => {
+    const d = haversineDistance(lat, lng, stop.lat, stop.lng);
+    if (d < minDist) {
+      minDist = d;
+      nearest = stop;
+    }
+  });
+  return nearest;
+}
+
 async function planTrip() {
   const destQuery = destinationInput.value.trim();
   if (!destQuery) {
-    showToast('Please enter a destination.', 'warning');
+    showToast('Please enter a destination or tap the map.', 'warning');
     return;
   }
 
@@ -406,7 +467,7 @@ async function planTrip() {
 
   if (matchedStops.length === 0) {
     tripResults.innerHTML = `
-      <p style="color:red;">❌ No stops found matching "${destQuery}". Try another name or check the spelling.</p>
+      <p style="color:red;">❌ No stops found matching "${destQuery}". Try another name or tap the map.</p>
     `;
     return;
   }
@@ -533,7 +594,18 @@ async function init() {
   if (planTripBtn) planTripBtn.addEventListener('click', openPlanTrip);
   if (searchTripBtn) searchTripBtn.addEventListener('click', planTrip);
   if (destinationInput) destinationInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') planTrip(); });
-  if (closePlanTrip) closePlanTrip.addEventListener('click', function() { planTripModal.classList.add('hidden'); });
+  if (pickDestinationMap) pickDestinationMap.addEventListener('click', startDestinationMapPicker);
+  if (closePlanTrip) closePlanTrip.addEventListener('click', function() {
+    planTripModal.classList.add('hidden');
+    if (destinationSelectionMode) {
+      destinationSelectionMode = false;
+      const mapInstance = getMap();
+      if (mapInstance && destinationSelectionCallback) {
+        mapInstance.off('click', destinationSelectionCallback);
+        destinationSelectionCallback = null;
+      }
+    }
+  });
   if (planTripModal) planTripModal.addEventListener('click', function(e) { if (e.target === this) this.classList.add('hidden'); });
 
   await loadRoutes();
