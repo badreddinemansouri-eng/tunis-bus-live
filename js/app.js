@@ -1,5 +1,5 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – v10.6 (Show on Map Fixed)
+// 🚌 TUNIS BUS LIVE – v10.7 (getBounds Fixed)
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap, focusOnBus } from './map.js';
@@ -509,11 +509,10 @@ function generateTripInstructions(routePath, userLocation, destinationLocation) 
   return steps;
 }
 
-// ============ DRAW TRIP ON MAP (FIXED) ============
+// ============ DRAW TRIP ON MAP (FIXED getBounds) ============
 function drawTripOnMap(routePath, userLocation, destinationLocation) {
   try {
     console.log('🗺️ drawTripOnMap called');
-    console.log('routePath:', routePath);
     const mapInstance = getMap();
     if (!mapInstance) {
       console.error('Map not initialized');
@@ -574,15 +573,23 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
       }
     }
 
-    const bounds = tripLayer.getBounds();
-    if (bounds.isValid()) {
-      mapInstance.fitBounds(bounds, { padding: [50, 50] });
-    } else {
-      if (userLocation) {
-        mapInstance.setView([userLocation.lat, userLocation.lng], 14);
+    // === FIXED: Get bounds safely ===
+    let bounds = null;
+    try {
+      if (typeof tripLayer.getBounds === 'function') {
+        bounds = tripLayer.getBounds();
       }
+    } catch (e) {
+      console.warn('Could not get bounds from tripLayer:', e);
     }
-    showToast('Trip shown on map', 'success');
+
+    if (bounds && bounds.isValid && bounds.isValid()) {
+      mapInstance.fitBounds(bounds, { padding: [50, 50] });
+    } else if (userLocation) {
+      mapInstance.setView([userLocation.lat, userLocation.lng], 14);
+    }
+
+    showToast('Trip shown on map ✅', 'success');
   } catch (e) {
     console.error('Error drawing trip:', e);
     showToast('Error showing trip on map: ' + e.message, 'error');
@@ -908,7 +915,7 @@ window.addEventListener('error', function(e) {
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v10.6 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
+  console.log(`🚌 Tunis Bus Live v10.7 – ${isNative ? 'Native (Background)' : 'PWA'} mode`);
   initPWA();
   loadLanguage();
   if (langSwitcher) langSwitcher.addEventListener('change', function() { setLanguage(this.value); });
