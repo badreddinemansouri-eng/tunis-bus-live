@@ -1,5 +1,5 @@
 // ============================================================
-// 🚌 TUNIS BUS LIVE – v13.0 (4 Smart Options + Full Itinerary)
+// 🚌 TUNIS BUS LIVE – v14.1 (Smart Routing Fix)
 // ============================================================
 
 import { initMap, showRoute, updateBuses, clearMap, focusStop, getMap, focusOnBus } from './map.js';
@@ -45,8 +45,22 @@ let destinationSelectionCallback = null;
 let userLocationMarker = null;
 let tripLayer = null;
 let selectedDestinationStop = null;
+let pendingWrites = [];
+let syncInProgress = false;
+let isAdmin = false;
+let currentUser = null;
 
 const isNative = window.Capacitor && Capacitor.isNative;
+
+// ============ FIREBASE AUTH ============
+let auth = firebase.auth();
+let performance = null;
+let crashlytics = null;
+
+try {
+  if (firebase.performance) performance = firebase.performance();
+  if (firebase.crashlytics) crashlytics = firebase.crashlytics();
+} catch(e) {}
 
 // ============ TRANSLATIONS ============
 const translations = {
@@ -68,7 +82,10 @@ const translations = {
     routeDetails: 'Route Details',
     close: 'Close',
     tripHistory: 'Trip History',
-    appTitle: 'Tunis Bus Live'
+    appTitle: 'Tunis Bus Live',
+    login: 'Login',
+    logout: 'Logout',
+    admin: 'Admin'
   },
   fr: {
     driver: 'Conducteur',
@@ -88,7 +105,10 @@ const translations = {
     routeDetails: 'Détails de l\'itinéraire',
     close: 'Fermer',
     tripHistory: 'Historique des Trajets',
-    appTitle: 'Tunis Bus Live'
+    appTitle: 'Tunis Bus Live',
+    login: 'Connexion',
+    logout: 'Déconnexion',
+    admin: 'Admin'
   },
   ar: {
     driver: 'سائق',
@@ -108,7 +128,10 @@ const translations = {
     routeDetails: 'تفاصيل المسار',
     close: 'إغلاق',
     tripHistory: 'سجل الرحلات',
-    appTitle: 'تونس باص لايف'
+    appTitle: 'تونس باص لايف',
+    login: 'تسجيل الدخول',
+    logout: 'تسجيل الخروج',
+    admin: 'المشرف'
   }
 };
 
@@ -174,6 +197,27 @@ const fsBusDriver = $('fsBusDriver');
 const fsBusStops = $('fsBusStops');
 const closeFullscreenBtn = $('closeFullscreenBus');
 
+const loginModal = $('loginModal');
+const loginEmail = $('loginEmail');
+const loginPassword = $('loginPassword');
+const loginBtn = $('loginBtn');
+const loginCancel = $('loginCancel');
+const loginError = $('loginError');
+const logoutBtn = $('logoutBtn');
+const userStatus = $('userStatus');
+
+const routeManagementModal = $('routeManagementModal');
+const closeRouteMgmt = $('closeRouteMgmt');
+const addRouteBtn = $('addRouteBtn');
+const routeMgmtForm = $('routeMgmtForm');
+const routeMgmtId = $('routeMgmtId');
+const routeMgmtName = $('routeMgmtName');
+const routeMgmtStops = $('routeMgmtStops');
+const routeMgmtAller = $('routeMgmtAller');
+const routeMgmtRetour = $('routeMgmtRetour');
+const routeMgmtSubmit = $('routeMgmtSubmit');
+const routeMgmtList = $('routeMgmtList');
+
 // ============ LANGUAGE FUNCTIONS ============
 function setLanguage(lang) {
   currentLang = lang;
@@ -184,8 +228,11 @@ function setLanguage(lang) {
   });
   const titleEl = document.getElementById('appTitle');
   if (titleEl && t.appTitle) titleEl.textContent = t.appTitle;
+  if (logoutBtn) logoutBtn.textContent = t.logout || 'Logout';
+  if (adminToggle) adminToggle.textContent = t.admin || 'Admin';
   localStorage.setItem('lang', lang);
 }
+
 function loadLanguage() {
   const saved = localStorage.getItem('lang') || 'en';
   if (langSwitcher) langSwitcher.value = saved;
@@ -200,6 +247,7 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
+
 function getCurrentPosition() {
   return new Promise((resolve, reject) => {
     navigator.geolocation.getCurrentPosition(resolve, reject, {
@@ -209,7 +257,7 @@ function getCurrentPosition() {
   });
 }
 
-// ============ MIN HEAP FOR DIJKSTRA ============
+// ============ MIN HEAP ============
 class MinHeap {
   constructor() { this.heap = []; }
   push(val) { this.heap.push(val); this._siftUp(this.heap.length - 1); }
@@ -243,6 +291,173 @@ class MinHeap {
   _swap(i, j) { [this.heap[i], this.heap[j]] = [this.heap[j], this.heap[i]]; }
 }
 
+// ============ AUTHENTICATION ============
+function initAuth() {
+  auth.onAuthStateChanged(user => {
+    currentUser = user;
+    if (user) {
+      isAdmin = user.email && user.email === 'admin@tunisbus.tn';
+      userStatus.textContent = `👤 ${user.email || user.uid}`;
+      userStatus.style.color = '#27ae60';
+      logoutBtn.style.display = 'inline-block';
+      driverNameInput.value = user.displayName || user.email || 'Driver';
+      driverNameInput.disabled = false;
+      if (isAdmin) {
+        adminToggle.style.display = 'inline-block';
+        if (routeMgmtList) routeMgmtList.style.display = 'block';
+      }
+      if (loginModal) loginModal.classList.add('hidden');
+    } else {
+      isAdmin = false;
+      userStatus.textContent = '👤 Not logged in';
+      userStatus.style.color = '#e74c3c';
+      logoutBtn.style.display = 'none';
+      driverNameInput.disabled = true;
+      driverNameInput.value = 'Driver (login required)';
+      adminToggle.style.display = 'none';
+      if (routeMgmtList) routeMgmtList.style.display = 'none';
+      if (!loginModal.classList.contains('hidden')) return;
+      if (currentView === 'driver') {
+        loginModal.classList.remove('hidden');
+      }
+    }
+  });
+}
+
+async function loginUser(email, password) {
+  try {
+    loginError.textContent = '';
+    await auth.signInWithEmailAndPassword(email, password);
+    showToast('✅ Login successful', 'success');
+    loginModal.classList.add('hidden');
+  } catch (err) {
+    loginError.textContent = err.message;
+    showToast('❌ Login failed: ' + err.message, 'error');
+  }
+}
+
+function logoutUser() {
+  auth.signOut();
+  showToast('Logged out', 'info');
+}
+
+// ============ OFFLINE WRITE QUEUE ============
+const DB_NAME = 'TunisBusDB';
+
+async function initWriteQueue() {
+  const db = await openDB();
+  if (!db.objectStoreNames.contains('pendingWrites')) {
+    const version = db.version;
+    db.close();
+    const request = indexedDB.open(DB_NAME, version + 1);
+    request.onupgradeneeded = (e) => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains('pendingWrites')) {
+        d.createObjectStore('pendingWrites', { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+  const db2 = await openDB();
+  const tx = db2.transaction('pendingWrites', 'readonly');
+  const store = tx.objectStore('pendingWrites');
+  const cursor = store.openCursor();
+  pendingWrites = [];
+  return new Promise((resolve) => {
+    cursor.onsuccess = (e) => {
+      const cur = e.target.result;
+      if (cur) {
+        pendingWrites.push(cur.value);
+        cur.continue();
+      } else {
+        resolve();
+      }
+    };
+    cursor.onerror = () => resolve();
+  });
+}
+
+async function addPendingWrite(write) {
+  const db = await openDB();
+  const tx = db.transaction('pendingWrites', 'readwrite');
+  const store = tx.objectStore('pendingWrites');
+  store.add(write);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = (e) => reject(e.target.error);
+  });
+  pendingWrites.push(write);
+  updateSyncBadge();
+}
+
+async function removePendingWrite(id) {
+  const db = await openDB();
+  const tx = db.transaction('pendingWrites', 'readwrite');
+  const store = tx.objectStore('pendingWrites');
+  store.delete(id);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = (e) => reject(e.target.error);
+  });
+  pendingWrites = pendingWrites.filter(w => w.id !== id);
+  updateSyncBadge();
+}
+
+async function processPendingWrites() {
+  if (syncInProgress || pendingWrites.length === 0) return;
+  syncInProgress = true;
+  showToast(`🔄 Syncing ${pendingWrites.length} pending operations...`, 'info');
+  let success = 0;
+  for (let i = pendingWrites.length - 1; i >= 0; i--) {
+    const write = pendingWrites[i];
+    try {
+      const ref = firebase.database().ref(write.path);
+      if (write.type === 'set') await ref.set(write.data);
+      else if (write.type === 'update') await ref.update(write.data);
+      else if (write.type === 'push') await ref.push(write.data);
+      else if (write.type === 'remove') await ref.remove();
+      await removePendingWrite(write.id);
+      success++;
+    } catch (err) {
+      console.error('Failed to sync write:', err);
+    }
+  }
+  syncInProgress = false;
+  if (success > 0) showToast(`✅ Synced ${success} operations`, 'success');
+  updateSyncBadge();
+}
+
+function updateSyncBadge() {
+  const badge = document.getElementById('syncBadge');
+  if (!badge) return;
+  const count = pendingWrites.length;
+  if (count === 0) badge.style.display = 'none';
+  else { badge.textContent = count; badge.style.display = 'inline-block'; }
+}
+
+async function secureWrite(path, data, type = 'set') {
+  if (isOnline()) {
+    try {
+      const ref = firebase.database().ref(path);
+      if (type === 'set') await ref.set(data);
+      else if (type === 'update') await ref.update(data);
+      else if (type === 'push') await ref.push(data);
+      else if (type === 'remove') await ref.remove();
+      return true;
+    } catch (err) {
+      console.error('Write failed, queuing:', err);
+      await addPendingWrite({ path, data, type, timestamp: Date.now() });
+      return false;
+    }
+  } else {
+    await addPendingWrite({ path, data, type, timestamp: Date.now() });
+    return false;
+  }
+}
+
 // ============ ADMIN DASHBOARD ============
 async function updateAdminStats() {
   try {
@@ -264,55 +479,160 @@ async function updateAdminStats() {
     }
     if (adminBusList) {
       adminBusList.innerHTML = busList.map(b => `
-        <div class="admin-bus-item">
+        <div class="admin-bus-item" data-trip="${b.tripId}" style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #eee;">
           <span>🚌 ${b.routeId}</span>
           <span>${b.driverName || 'Unknown'}</span>
           <span>${b.direction || '—'}</span>
           <span>${new Date(b.lastUpdate).toLocaleTimeString()}</span>
+          <button class="zoom-bus-btn" data-trip="${b.tripId}" style="background:#3498db;border:none;border-radius:4px;padding:2px 10px;color:white;cursor:pointer;">Zoom</button>
         </div>
       `).join('');
+      document.querySelectorAll('.zoom-bus-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+          const tripId = this.dataset.trip;
+          const bus = activeBuses[tripId];
+          if (bus && bus.lat && bus.lng) focusStop(bus.lat, bus.lng, `Bus ${bus.routeId}`);
+        });
+      });
+      const filterInput = document.getElementById('adminFilterRoute');
+      if (filterInput) {
+        filterInput.addEventListener('input', function() {
+          const val = this.value.trim().toUpperCase();
+          document.querySelectorAll('.admin-bus-item').forEach(item => {
+            const route = item.querySelector('span:first-child')?.textContent || '';
+            item.style.display = route.includes(val) ? 'flex' : 'none';
+          });
+        });
+      }
     }
   } catch (e) {
     console.error('Admin stats error:', e);
   }
 }
+
 function openAdmin() {
+  if (!isAdmin && !confirm('Admin access required. Are you admin?')) return;
   adminPanel.classList.remove('hidden');
   updateAdminStats();
   if (adminInterval) clearInterval(adminInterval);
   adminInterval = setInterval(updateAdminStats, 10000);
+  if (isAdmin && routeMgmtList) {
+    routeMgmtList.style.display = 'block';
+    renderRouteManagementList();
+  }
 }
+
 function closeAdminPanel() {
   adminPanel.classList.add('hidden');
   if (adminInterval) clearInterval(adminInterval);
 }
 
+// ============ ROUTE MANAGEMENT ============
+function renderRouteManagementList() {
+  if (!routeMgmtList) return;
+  routeMgmtList.innerHTML = routeData.map(r => `
+    <div class="route-mgmt-item" style="padding:8px;border-bottom:1px solid #ddd;display:flex;justify-content:space-between;">
+      <span><strong>${r.id}</strong> - ${r.name}</span>
+      <div>
+        <button class="edit-route-btn" data-id="${r.id}" style="background:#f39c12;border:none;border-radius:4px;padding:2px 10px;color:white;cursor:pointer;">Edit</button>
+        <button class="delete-route-btn" data-id="${r.id}" style="background:#e74c3c;border:none;border-radius:4px;padding:2px 10px;color:white;cursor:pointer;">Delete</button>
+      </div>
+    </div>
+  `).join('');
+  document.querySelectorAll('.edit-route-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      const id = this.dataset.id;
+      const route = routeData.find(r => r.id === id);
+      if (route) openRouteMgmtForm(route);
+    });
+  });
+  document.querySelectorAll('.delete-route-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      if (confirm(`Delete route ${this.dataset.id}?`)) deleteRoute(this.dataset.id);
+    });
+  });
+}
+
+function openRouteMgmtForm(route = null) {
+  routeManagementModal.classList.remove('hidden');
+  if (route) {
+    routeMgmtId.value = route.id;
+    routeMgmtName.value = route.name;
+    routeMgmtStops.value = JSON.stringify(route.stops, null, 2);
+    routeMgmtAller.value = JSON.stringify(route.aller || [], null, 2);
+    routeMgmtRetour.value = JSON.stringify(route.retour || [], null, 2);
+    routeMgmtSubmit.textContent = 'Update Route';
+  } else {
+    routeMgmtId.value = '';
+    routeMgmtName.value = '';
+    routeMgmtStops.value = '';
+    routeMgmtAller.value = '';
+    routeMgmtRetour.value = '';
+    routeMgmtSubmit.textContent = 'Add Route';
+  }
+}
+
+async function saveRouteFromForm() {
+  const id = routeMgmtId.value.trim();
+  const name = routeMgmtName.value.trim();
+  if (!id || !name) { showToast('Route ID and Name are required', 'warning'); return; }
+  let stops, aller, retour;
+  try {
+    stops = JSON.parse(routeMgmtStops.value || '[]');
+    aller = JSON.parse(routeMgmtAller.value || '[]');
+    retour = JSON.parse(routeMgmtRetour.value || '[]');
+  } catch(e) {
+    showToast('Invalid JSON in stops/directions', 'error');
+    return;
+  }
+  if (!stops.length) { showToast('At least one stop required', 'warning'); return; }
+  const newRoute = { id, name, stops, aller, retour };
+  const existingIndex = routeData.findIndex(r => r.id === id);
+  if (existingIndex >= 0) routeData[existingIndex] = newRoute;
+  else routeData.push(newRoute);
+  await saveRoutes(routeData);
+  await secureWrite(`routes/${id}`, newRoute, 'set');
+  populateRouteSelects();
+  renderRouteManagementList();
+  showToast(`Route ${id} saved successfully`, 'success');
+  routeManagementModal.classList.add('hidden');
+}
+
+async function deleteRoute(id) {
+  routeData = routeData.filter(r => r.id !== id);
+  await saveRoutes(routeData);
+  await secureWrite(`routes/${id}`, null, 'remove');
+  populateRouteSelects();
+  renderRouteManagementList();
+  showToast(`Route ${id} deleted`, 'info');
+}
+
 // ============ FEEDBACK ============
 let selectedRating = 0;
+
 function openFeedback() {
   feedbackModal.classList.remove('hidden');
   selectedRating = 0;
   document.querySelectorAll('.rating-star').forEach(el => el.classList.remove('active'));
   feedbackText.value = '';
 }
+
 function closeFeedbackModal() {
   feedbackModal.classList.add('hidden');
 }
+
 async function submitFeedbackHandler() {
   const rating = selectedRating;
   const comment = feedbackText.value.trim();
-  if (rating === 0) {
-    showToast('Please select a rating', 'warning');
-    return;
-  }
+  if (rating === 0) { showToast('Please select a rating', 'warning'); return; }
   try {
-    await firebase.database().ref('feedback').push({
-      rating,
-      comment,
+    await secureWrite('feedback', {
+      rating, comment,
       timestamp: firebase.database.ServerValue.TIMESTAMP,
       routeId: selectedRouteId || 'unknown',
-      device: navigator.userAgent
-    });
+      device: navigator.userAgent,
+      userId: currentUser ? currentUser.uid : 'anonymous'
+    }, 'push');
     showToast('Thank you for your feedback!', 'success');
     closeFeedbackModal();
   } catch (e) {
@@ -322,21 +642,15 @@ async function submitFeedbackHandler() {
 
 // ============ NEARBY STOPS ============
 async function findNearbyStops() {
-  if (!navigator.geolocation) {
-    showToast('Geolocation not supported', 'error');
-    return;
-  }
+  if (!navigator.geolocation) { showToast('Geolocation not supported', 'error'); return; }
   showToast('Getting your location...', 'info');
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
+      const lat = pos.coords.latitude, lng = pos.coords.longitude;
       const results = getClosestStops(lat, lng, 8);
       displayNearbyResults(results);
     },
-    (err) => {
-      showToast('Could not get location. Please enable GPS.', 'error');
-    },
+    (err) => { showToast('Could not get location. Please enable GPS.', 'error'); },
     { enableHighAccuracy: true, timeout: 10000 }
   );
 }
@@ -347,12 +661,7 @@ function getClosestStops(userLat, userLng, limit = 8) {
     route.stops.forEach(stop => {
       const key = `${stop.lat},${stop.lng}`;
       if (!stopMap.has(key)) {
-        stopMap.set(key, {
-          name: stop.name,
-          lat: stop.lat,
-          lng: stop.lng,
-          routes: new Set()
-        });
+        stopMap.set(key, { name: stop.name, lat: stop.lat, lng: stop.lng, routes: new Set() });
       }
       stopMap.get(key).routes.add(route.id);
     });
@@ -383,9 +692,7 @@ function displayNearbyResults(stops) {
     nearbyResults.innerHTML = html;
     nearbyResults.querySelectorAll('.nearby-stop-item').forEach(el => {
       el.addEventListener('click', function() {
-        const lat = parseFloat(this.dataset.lat);
-        const lng = parseFloat(this.dataset.lng);
-        const name = this.dataset.name;
+        const lat = parseFloat(this.dataset.lat), lng = parseFloat(this.dataset.lng), name = this.dataset.name;
         focusStop(lat, lng, name);
         nearbyModal.classList.add('hidden');
       });
@@ -399,12 +706,7 @@ function updateUserLocation(lat, lng) {
   if (!map) return;
   if (!userLocationMarker) {
     userLocationMarker = L.circleMarker([lat, lng], {
-      radius: 8,
-      color: '#2196F3',
-      fillColor: '#fff',
-      fillOpacity: 1,
-      weight: 3,
-      className: 'user-location-marker'
+      radius: 8, color: '#2196F3', fillColor: '#fff', fillOpacity: 1, weight: 3, className: 'user-location-marker'
     }).addTo(map);
     userLocationMarker.bindPopup('You are here');
   } else {
@@ -419,12 +721,7 @@ function buildStopGraph() {
     route.stops.forEach(stop => {
       const key = `${stop.lat},${stop.lng}`;
       if (!stopMap.has(key)) {
-        stopMap.set(key, {
-          name: stop.name,
-          lat: stop.lat,
-          lng: stop.lng,
-          routes: new Set()
-        });
+        stopMap.set(key, { name: stop.name, lat: stop.lat, lng: stop.lng, routes: new Set() });
       }
       stopMap.get(key).routes.add(route.id);
     });
@@ -432,9 +729,7 @@ function buildStopGraph() {
   return stopMap;
 }
 
-// ============================================================
-// 🧠 DIJKSTRA ENGINE (Parametrized for 4 strategies)
-// ============================================================
+// ============ ROUTING ============
 function runDijkstra(adj, startKey, endKey, weightFn) {
   const distMap = new Map();
   const prevMap = new Map();
@@ -482,16 +777,14 @@ function buildGraph(routeData) {
   const adj = new Map();
   allKeys.forEach(k => adj.set(k, []));
 
-  // 1. Bus edges
   routeData.forEach(route => {
     const stops = route.stops;
     for (let i = 0; i < stops.length - 1; i++) {
-      const s1 = stops[i];
-      const s2 = stops[i + 1];
+      const s1 = stops[i], s2 = stops[i+1];
       const k1 = `${s1.lat},${s1.lng}`;
       const k2 = `${s2.lat},${s2.lng}`;
       const dist = haversineDistance(s1.lat, s1.lng, s2.lat, s2.lng);
-      const timeWeight = (dist / BUS_SPEED_KMH) * 60 + WAITING_TIME_MIN;
+      const timeWeight = (dist / BUS_SPEED_KMH) * 60;
       adj.get(k1).push({
         toKey: k2,
         timeWeight: timeWeight,
@@ -513,13 +806,10 @@ function buildGraph(routeData) {
     }
   });
 
-  // 2. Walking edges
   for (let i = 0; i < allKeys.length; i++) {
     for (let j = i + 1; j < allKeys.length; j++) {
-      const k1 = allKeys[i];
-      const k2 = allKeys[j];
-      const s1 = stopMap.get(k1);
-      const s2 = stopMap.get(k2);
+      const k1 = allKeys[i], k2 = allKeys[j];
+      const s1 = stopMap.get(k1), s2 = stopMap.get(k2);
       const dist = haversineDistance(s1.lat, s1.lng, s2.lat, s2.lng);
       if (dist < TRANSFER_WALK_RADIUS_KM) {
         const timeWeight = (dist / WALK_SPEED_KMH) * 60;
@@ -552,9 +842,20 @@ function reconstructResult(result, startKey, endKey, stopMap) {
 
   let totalWalk = 0;
   path.forEach(edge => { if (edge.walkDist) totalWalk += edge.walkDist; });
-  const busCount = path.filter(e => e.type === 'bus').length;
 
-  // Merge consecutive bus legs with same route
+  let busRides = 0;
+  let prevRoute = null;
+  for (const edge of path) {
+    if (edge.type === 'bus') {
+      if (prevRoute !== edge.routeId) {
+        busRides++;
+        prevRoute = edge.routeId;
+      }
+    } else {
+      prevRoute = null;
+    }
+  }
+
   const mergedPath = [];
   for (const edge of path) {
     if (edge.type === 'walk') {
@@ -569,17 +870,18 @@ function reconstructResult(result, startKey, endKey, stopMap) {
     }
   }
 
+  const totalTime = Math.round(totalWeight + busRides * WAITING_TIME_MIN);
+
   return {
     path: mergedPath,
-    totalTime: Math.round(totalWeight),
+    totalTime: totalTime,
     totalWalkDist: Math.round(totalWalk * 1000),
-    busCount: busCount,
+    busCount: busRides,
     startKey,
     endKey
   };
 }
 
-// ============ GENERATE TRIP INSTRUCTIONS ============
 function generateTripInstructions(routePath, userLocation, destinationLocation) {
   let steps = [];
   if (!routePath || routePath.length === 0) {
@@ -645,7 +947,6 @@ function generateTripInstructions(routePath, userLocation, destinationLocation) 
   return steps;
 }
 
-// ============ DRAW TRIP ON MAP (with clear walking vs bus) ============
 function drawTripOnMap(routePath, userLocation, destinationLocation) {
   try {
     const mapInstance = getMap();
@@ -665,7 +966,6 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
 
     routePath.forEach((edge, idx) => {
       if (edge.type === 'walk') {
-        // Grey, dashed line for walking (avoids "crossing buildings" visually)
         const walkLine = L.polyline([
           [edge.fromStop.lat, edge.fromStop.lng],
           [edge.toStop.lat, edge.toStop.lng]
@@ -683,7 +983,6 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
         const segment = allStops.slice(start, end + 1).map(s => [s.lat, s.lng]);
         const colors = ['#2196F3', '#FF9800', '#4CAF50', '#9C27B0', '#F44336'];
         const color = colors[idx % colors.length];
-        // Solid line for bus
         const line = L.polyline(segment, { color: color, weight: 6, opacity: 0.8 }).addTo(tripLayer);
         line.bindPopup(`🚌 ${edge.routeId}`);
       }
@@ -699,14 +998,14 @@ function drawTripOnMap(routePath, userLocation, destinationLocation) {
       mapInstance.setView([userLocation.lat, userLocation.lng], 14);
     }
 
-    showToast('Trip shown on map ✅ (Walking = Grey dashed)', 'success');
+    showToast('Trip shown on map ✅', 'success');
   } catch (e) {
     console.error('Error drawing trip:', e);
     showToast('Error showing trip: ' + e.message, 'error');
   }
 }
 
-// ============ PLAN MY TRIP (4 OPTIONS) ============
+// ============ PLAN TRIP ============
 function openPlanTrip() {
   planTripModal.classList.remove('hidden');
   tripResults.innerHTML = '';
@@ -842,16 +1141,12 @@ function executeSmartRoute(fromStop, toStop, userLocation) {
 
   const { adj, stopMap } = buildGraph(routeData);
 
-  // 1. Fastest (Time)
   const resTime = runDijkstra(adj, startKey, endKey, (e) => e.timeWeight);
-  // 2. Fewest Buses
   const resTransfers = runDijkstra(adj, startKey, endKey, (e) => e.type === 'bus' ? 1 : 0.001);
-  // 3. Least Walking
   const resWalk = runDijkstra(adj, startKey, endKey, (e) => e.type === 'walk' ? e.walkDist : 0.001);
-  // 4. Balanced (Time + Walk penalty + Transfer penalty)
   const resBalanced = runDijkstra(adj, startKey, endKey, (e) => {
-    const walkPenalty = (e.walkDist || 0) * 2; // 1km walk adds 2 min penalty
-    const transferPenalty = e.type === 'bus' ? 1 : 0;
+    const walkPenalty = (e.walkDist || 0) * 2;
+    const transferPenalty = e.type === 'bus' ? 0.5 : 0;
     return e.timeWeight + walkPenalty + transferPenalty;
   });
 
@@ -860,7 +1155,6 @@ function executeSmartRoute(fromStop, toStop, userLocation) {
   const opt3 = reconstructResult(resWalk, startKey, endKey, stopMap);
   const opt4 = reconstructResult(resBalanced, startKey, endKey, stopMap);
 
-  // Filter out nulls and deduplicate
   const options = [];
   const seen = new Set();
   [opt1, opt2, opt3, opt4].forEach(opt => {
@@ -890,7 +1184,6 @@ function executeSmartRoute(fromStop, toStop, userLocation) {
     return;
   }
 
-  // Store options globally for "Show on map"
   window._tripOptions = options.map(opt => ({
     path: opt.path,
     userLocation: userLocation,
@@ -909,7 +1202,6 @@ function executeSmartRoute(fromStop, toStop, userLocation) {
     const totalTime = opt.totalTime;
     const busCount = opt.busCount;
 
-    // Build full step list
     let stepsHtml = instructions.map(step => 
       `<div style="font-size:0.8rem;padding:2px 0;border-bottom:1px solid #f0f0f0;">${step.instruction}</div>`
     ).join('');
@@ -924,7 +1216,6 @@ function executeSmartRoute(fromStop, toStop, userLocation) {
             <span>🚌 ${busCount} bus(es)</span>
           </div>
         </div>
-        <!-- FULL WRITTEN ITINERARY -->
         <div style="margin-top:6px;max-height:80px;overflow-y:auto;background:white;padding:6px;border-radius:6px;border:1px solid #eee;">
           ${stepsHtml}
         </div>
@@ -1051,24 +1342,40 @@ function addConsoleViewer() {
   };
 }
 
-// ============ ERROR LOGGING ============
+// ============ GLOBAL ERROR HANDLER ============
 window.addEventListener('error', function(e) {
   console.error('Global error:', e);
   try {
+    if (crashlytics) {
+      crashlytics.recordException(e.error || e.message);
+    }
     firebase.database().ref('errors').push({
       message: e.message,
       stack: e.stack,
       url: window.location.href,
-      timestamp: firebase.database.ServerValue.TIMESTAMP
+      timestamp: firebase.database.ServerValue.TIMESTAMP,
+      userId: currentUser ? currentUser.uid : 'anonymous'
     });
   } catch (err) { /* ignore */ }
 });
 
 // ============ INIT ============
 async function init() {
-  console.log(`🚌 Tunis Bus Live v13.0 – 4 Smart Trip Options`);
+  console.log(`🚌 Tunis Bus Live v14.1 – Official Release`);
+  
   initPWA();
   loadLanguage();
+  initAuth();
+  
+  if (performance) {
+    performance.dataCollectionEnabled = true;
+    performance.instrumentationEnabled = true;
+    console.log('✅ Performance Monitoring enabled');
+  }
+  if (crashlytics) {
+    console.log('✅ Crashlytics enabled');
+  }
+
   if (langSwitcher) langSwitcher.addEventListener('change', function() { setLanguage(this.value); });
   if (adminToggle) adminToggle.addEventListener('click', openAdmin);
   if (closeAdmin) closeAdmin.addEventListener('click', closeAdminPanel);
@@ -1106,6 +1413,23 @@ async function init() {
   });
   if (planTripModal) planTripModal.addEventListener('click', function(e) { if (e.target === this) this.classList.add('hidden'); });
 
+  if (loginBtn) loginBtn.addEventListener('click', function() {
+    const email = loginEmail.value.trim();
+    const password = loginPassword.value.trim();
+    if (email && password) loginUser(email, password);
+    else showToast('Please enter email and password', 'warning');
+  });
+  if (loginCancel) loginCancel.addEventListener('click', function() {
+    loginModal.classList.add('hidden');
+  });
+  if (logoutBtn) logoutBtn.addEventListener('click', logoutUser);
+  if (loginModal) loginModal.addEventListener('click', function(e) { if (e.target === this) this.classList.add('hidden'); });
+
+  if (addRouteBtn) addRouteBtn.addEventListener('click', function() { openRouteMgmtForm(null); });
+  if (closeRouteMgmt) closeRouteMgmt.addEventListener('click', function() { routeManagementModal.classList.add('hidden'); });
+  if (routeMgmtSubmit) routeMgmtSubmit.addEventListener('click', saveRouteFromForm);
+  if (routeManagementModal) routeManagementModal.addEventListener('click', function(e) { if (e.target === this) this.classList.add('hidden'); });
+
   await loadRoutes();
   setupTabs();
   setupDriverUI();
@@ -1114,6 +1438,7 @@ async function init() {
   setupHistory();
   setupFavorites();
   setupConnection();
+
   map = initMap('map');
   listenToActiveBuses();
 
@@ -1124,6 +1449,7 @@ async function init() {
     connectionStatus.textContent = 'Online ✅';
     connectionStatus.className = 'connection-badge online';
     listenToActiveBuses();
+    processPendingWrites();
   });
   onOffline(() => {
     connectionStatus.textContent = 'Offline ⚠️';
@@ -1144,6 +1470,9 @@ async function init() {
       { timeout: 5000, enableHighAccuracy: false }
     );
   }
+
+  await initWriteQueue();
+  if (isOnline()) processPendingWrites();
 
   addConsoleViewer();
   console.log('✅ App ready');
@@ -1180,6 +1509,7 @@ async function loadRoutes() {
     showToast('Failed to load route data', 'error');
   }
 }
+
 function populateRouteSelects() {
   if (!routeSelect) return;
   routeSelect.innerHTML = '<option value="">-- Choose --</option>';
@@ -1206,9 +1536,14 @@ function setupTabs() {
   tabDriver.addEventListener('click', () => switchView('driver'));
   tabPassenger.addEventListener('click', () => switchView('passenger'));
 }
+
 function switchView(view) {
   currentView = view;
   if (view === 'driver') {
+    if (!currentUser) {
+      loginModal.classList.remove('hidden');
+      return;
+    }
     driverView.classList.add('active');
     passengerView.classList.remove('active');
     tabDriver.classList.add('active');
@@ -1229,7 +1564,13 @@ function setupDriverUI() {
   btnStartTrip.addEventListener('click', startTrip);
   btnStopTrip.addEventListener('click', stopTrip);
 }
+
 async function startTrip() {
+  if (!currentUser) {
+    showToast('Please login to start a trip', 'warning');
+    loginModal.classList.remove('hidden');
+    return;
+  }
   if (isTripActive) { showToast('Trip already active', 'warning'); return; }
   let routeId = routeSelect.value;
   let direction = directionSelect.value;
@@ -1259,6 +1600,7 @@ async function startTrip() {
   }
   startTripConfirmed(routeId, direction);
 }
+
 async function startTripConfirmed(routeId, direction) {
   const route = routeData.find(r => r.id === routeId);
   if (!route) { alert('Route not found'); return; }
@@ -1273,16 +1615,17 @@ async function startTripConfirmed(routeId, direction) {
       }
     } catch (e) {}
   }
-  const driver = driverNameInput.value.trim() || 'Anonymous';
+  const driver = driverNameInput.value.trim() || currentUser.displayName || currentUser.email || 'Anonymous';
   currentTripId = `${routeId}_${Date.now()}`;
   const tripData = {
     routeId, direction, driverName: driver,
+    driverUid: currentUser.uid,
     startedAt: firebase.database.ServerValue.TIMESTAMP,
     lastUpdate: firebase.database.ServerValue.TIMESTAMP,
     lat: null, lng: null
   };
   try {
-    await firebase.database().ref(`activeBuses/${currentTripId}`).set(tripData);
+    await secureWrite(`activeBuses/${currentTripId}`, tripData, 'set');
   } catch (e) {
     console.error('Firebase error:', e);
     showToast('Could not start trip. Check connection.', 'error');
@@ -1309,12 +1652,12 @@ async function startTripConfirmed(routeId, direction) {
         driverLocation = location;
         driverSpeed = location.speed || 0;
         lastMovementTime = Date.now();
-        firebase.database().ref(`activeBuses/${currentTripId}`).update({
+        secureWrite(`activeBuses/${currentTripId}`, {
           lat: location.latitude, lng: location.longitude,
           accuracy: location.accuracy, speed: driverSpeed,
           heading: location.heading || 0,
           lastUpdate: firebase.database.ServerValue.TIMESTAMP
-        });
+        }, 'update');
         driverStatus.innerHTML = `<i class="fas fa-broadcast-tower"></i> BG Sharing (acc: ${Math.round(location.accuracy)}m)`;
       });
       driverStatus.innerHTML = '✅ Native background tracking active';
@@ -1337,24 +1680,26 @@ async function startTripConfirmed(routeId, direction) {
   autoEndTimer = setInterval(checkAutoEnd, 30000);
   setTimeout(() => switchView('passenger'), 500);
 }
+
 function startWebGeolocation() {
   watchId = navigator.geolocation.watchPosition(
     pos => {
       driverLocation = pos.coords;
       driverSpeed = pos.coords.speed || 0;
       lastMovementTime = Date.now();
-      firebase.database().ref(`activeBuses/${currentTripId}`).update({
+      secureWrite(`activeBuses/${currentTripId}`, {
         lat: pos.coords.latitude, lng: pos.coords.longitude,
         accuracy: pos.coords.accuracy, speed: driverSpeed,
         heading: pos.coords.heading || 0,
         lastUpdate: firebase.database.ServerValue.TIMESTAMP
-      });
+      }, 'update');
       driverStatus.innerHTML = `<i class="fas fa-broadcast-tower"></i> Sharing (acc: ${Math.round(pos.coords.accuracy)}m)`;
     },
     err => { driverStatus.textContent = '⚠️ Location error: ' + err.message; },
     { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
   );
 }
+
 function stopTrip() {
   if (isNative && bgWatcherId) {
     try {
@@ -1366,7 +1711,7 @@ function stopTrip() {
   }
   if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
   if (currentTripId) {
-    firebase.database().ref(`activeBuses/${currentTripId}`).remove();
+    secureWrite(`activeBuses/${currentTripId}`, null, 'remove');
     saveTrip({ id: currentTripId, endedAt: Date.now() });
     currentTripId = null;
   }
@@ -1379,6 +1724,7 @@ function stopTrip() {
   driverStatus.innerHTML = '<i class="fas fa-flag-checkered"></i> Trip ended.';
   showToast('🚏 Trip ended', 'info');
 }
+
 function checkAutoEnd() {
   if (!currentTripId || !isTripActive) return;
   if (!driverLocation) return;
@@ -1393,6 +1739,7 @@ function checkAutoEnd() {
     stopTrip();
   }
 }
+
 function autoDetectRoute(lat, lng) {
   let best = null, bestDist = Infinity, bestDir = 'forward';
   routeData.forEach(route => {
@@ -1404,6 +1751,7 @@ function autoDetectRoute(lat, lng) {
   if (bestDist > 0.5) return null;
   return { route: best, direction: bestDir };
 }
+
 function isNearRoute(route, lat, lng) {
   return route.stops.some(s => haversineDistance(lat, lng, s.lat, s.lng) <= 0.5);
 }
@@ -1426,6 +1774,7 @@ function setupFavorites() {
     });
   }
 }
+
 function updateFavoriteButton() {
   if (!favoriteBtn) return;
   const isFav = favorites.includes(selectedRouteId);
@@ -1467,6 +1816,7 @@ function setupSearch() {
     searchResults.innerHTML = '';
   });
 }
+
 async function handleSearch() {
   const q = searchInput.value.trim();
   if (q.length < 1) { searchResults.classList.add('hidden'); return; }
@@ -1516,6 +1866,7 @@ async function handleSearch() {
     });
   });
 }
+
 function showRouteDetail(routeId) {
   const route = routeData.find(r => r.id === routeId);
   if (!route) return;
@@ -1548,6 +1899,7 @@ function showRouteDetail(routeId) {
     showRouteDetail(id);
   };
 }
+
 function showStopDetail(lat, lng, name) {
   const routesWithStop = routeData.filter(r => r.stops.some(s => s.lat === lat && s.lng === lng));
   routeDetailContent.innerHTML = `
@@ -1614,6 +1966,7 @@ function openFullscreenBus(routeId, bus) {
   });
   fsBusStops.innerHTML = html;
 }
+
 function closeFullscreenBus() {
   fullscreenOverlay.classList.add('hidden');
   fullscreenBusActive = false;
@@ -1625,6 +1978,7 @@ function closeFullscreenBus() {
   }
   updateBusUI();
 }
+
 window.openFullscreenBus = openFullscreenBus;
 window.closeFullscreenBus = closeFullscreenBus;
 window.focusStop = focusStop;
@@ -1661,6 +2015,7 @@ function listenToActiveBuses() {
     }
   });
 }
+
 function cleanupStaleBuses() {
   const now = Date.now();
   let removed = false;
@@ -1669,7 +2024,7 @@ function cleanupStaleBuses() {
     if (!bus.lastUpdate) continue;
     if (now - bus.lastUpdate > REMOVE_THRESHOLD) {
       if (key !== currentTripId) {
-        firebase.database().ref(`activeBuses/${key}`).remove().catch(() => {});
+        secureWrite(`activeBuses/${key}`, null, 'remove');
         delete activeBuses[key];
         removed = true;
       }
@@ -1677,6 +2032,7 @@ function cleanupStaleBuses() {
   }
   if (removed) updateBusUI();
 }
+
 function updateBusUI() {
   const now = Date.now();
   const validBuses = Object.values(activeBuses).filter(bus => {
@@ -1695,7 +2051,7 @@ function updateBusUI() {
         const detectedDir = distToFirst < distToLast ? 'forward' : 'backward';
         if (bus.direction !== detectedDir) {
           bus.direction = detectedDir;
-          firebase.database().ref(`activeBuses/${bus.tripId}/direction`).set(detectedDir).catch(() => {});
+          secureWrite(`activeBuses/${bus.tripId}/direction`, detectedDir, 'update');
         }
       }
     }
@@ -1710,6 +2066,7 @@ function updateBusUI() {
   updateBuses(grouped, routeData);
   renderBusList(Object.values(grouped));
 }
+
 function renderBusList(buses) {
   if (!busList) return;
   busList.innerHTML = '';
@@ -1742,10 +2099,10 @@ function renderBusList(buses) {
     li.querySelector('.report-btn').addEventListener('click', async (e) => {
       e.stopPropagation();
       const tripId = e.target.dataset.trip;
-      await firebase.database().ref(`activeBuses/${tripId}`).update({
+      await secureWrite(`activeBuses/${tripId}`, {
         lastUpdate: firebase.database.ServerValue.TIMESTAMP,
-        reportedBy: 'passenger'
-      });
+        reportedBy: currentUser ? currentUser.uid : 'passenger'
+      }, 'update');
       showToast('✅ Bus position confirmed by passenger', 'success');
     });
     busList.appendChild(li);
@@ -1800,6 +2157,7 @@ function showToast(message, type = 'info') {
   }
   setTimeout(() => { if (toast.parentNode) toast.remove(); }, 3000);
 }
+
 window.showToast = showToast;
 
 // ============ START ============
