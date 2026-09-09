@@ -23,7 +23,10 @@
           <span id="appTitle" style="font-size:1.2rem;font-weight:800;color:white;text-shadow:0 2px 8px rgba(0,0,0,0.8);">Tunis Bus Live</span>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <button id="adminToggle" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;color:white;font-size:0.7rem;cursor:pointer;backdrop-filter:blur(4px);">🔒 Admin</button>
+          <span id="userStatus" style="color:white;font-size:0.7rem;margin:0 4px;">👤 Not logged in</span>
+          <span id="syncBadge" style="display:none;background:#e74c3c;color:white;border-radius:50%;padding:2px 8px;font-size:0.7rem;margin-left:5px;">0</span>
+          <button id="logoutBtn" style="display:none;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;color:white;font-size:0.7rem;cursor:pointer;backdrop-filter:blur(4px);">Logout</button>
+          <button id="adminToggle" style="display:none;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;color:white;font-size:0.7rem;cursor:pointer;backdrop-filter:blur(4px);">🔒 Admin</button>
           <select id="langSwitcher" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:20px;padding:4px 12px;font-size:0.8rem;backdrop-filter:blur(4px);">
             <option value="en">EN</option>
             <option value="fr">FR</option>
@@ -43,7 +46,7 @@
       <div class="card driver-card">
         <h2><i class="fas fa-user"></i> <span data-i18n="driverPanel">Driver Panel</span></h2>
         <label for="driverName" data-i18n="yourName">Your Name</label>
-        <input type="text" id="driverName" placeholder="e.g., Ahmed" autocomplete="name">
+        <input type="text" id="driverName" placeholder="e.g., Ahmed" autocomplete="name" disabled>
         <div class="search-input" style="margin-top:8px;">
           <i class="fas fa-magnifying-glass"></i>
           <input type="text" id="driverSearchInput" placeholder="Search route...">
@@ -148,7 +151,7 @@
       </div>
     </div>
 
-    <!-- PLAN TRIP MODAL (with Map Picker) -->
+    <!-- PLAN TRIP MODAL -->
     <div id="planTripModal" class="modal hidden">
       <div class="modal-content" style="max-width:500px;">
         <h3><i class="fas fa-route"></i> Plan My Trip</h3>
@@ -168,13 +171,36 @@
     <!-- LOGIN MODAL -->
     <div id="loginModal" class="modal hidden">
       <div class="modal-content">
-        <h3>🔒 Admin Login</h3>
-        <p style="color:#666;font-size:0.9rem;">Enter your credentials to access the dashboard.</p>
+        <h3>🔐 Driver Login</h3>
+        <p style="color:#666;font-size:0.9rem;">Enter your credentials to start driving.</p>
         <input type="email" id="loginEmail" placeholder="Email" style="width:100%;padding:10px;margin:8px 0;border:2px solid #ddd;border-radius:8px;">
         <input type="password" id="loginPassword" placeholder="Password" style="width:100%;padding:10px;margin:8px 0;border:2px solid #ddd;border-radius:8px;">
         <button id="loginBtn" class="btn btn-primary" style="width:auto;padding:8px 16px;">Login</button>
         <button id="loginCancel" class="btn btn-secondary" style="width:auto;padding:8px 16px;">Cancel</button>
         <div id="loginError" style="color:red;font-size:0.85rem;margin-top:8px;"></div>
+      </div>
+    </div>
+
+    <!-- ROUTE MANAGEMENT MODAL -->
+    <div id="routeManagementModal" class="modal hidden">
+      <div class="modal-content" style="max-width:600px;">
+        <h3>🚏 Route Management</h3>
+        <form id="routeMgmtForm">
+          <label>Route ID</label>
+          <input type="text" id="routeMgmtId" placeholder="e.g., 100" style="width:100%;padding:8px;margin:4px 0;border:2px solid #ddd;border-radius:8px;" required>
+          <label>Route Name</label>
+          <input type="text" id="routeMgmtName" placeholder="e.g., Ligne 100" style="width:100%;padding:8px;margin:4px 0;border:2px solid #ddd;border-radius:8px;" required>
+          <label>Stops (JSON array)</label>
+          <textarea id="routeMgmtStops" rows="4" placeholder='[{"name":"Stop1","lat":36.8,"lng":10.1},...]' style="width:100%;padding:8px;margin:4px 0;border:2px solid #ddd;border-radius:8px;font-family:monospace;"></textarea>
+          <label>Aller (JSON array of stops, optional)</label>
+          <textarea id="routeMgmtAller" rows="3" placeholder='[{"name":"Stop1","lat":36.8,"lng":10.1},...]' style="width:100%;padding:8px;margin:4px 0;border:2px solid #ddd;border-radius:8px;font-family:monospace;"></textarea>
+          <label>Retour (JSON array, optional)</label>
+          <textarea id="routeMgmtRetour" rows="3" placeholder='[{"name":"Stop1","lat":36.8,"lng":10.1},...]' style="width:100%;padding:8px;margin:4px 0;border:2px solid #ddd;border-radius:8px;font-family:monospace;"></textarea>
+          <div style="display:flex;gap:10px;margin-top:10px;">
+            <button type="button" id="routeMgmtSubmit" class="btn btn-primary" style="width:auto;padding:8px 16px;">Save Route</button>
+            <button type="button" id="closeRouteMgmt" class="btn btn-secondary" style="width:auto;padding:8px 16px;">Cancel</button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -188,7 +214,10 @@
         <div class="stat-card"><span id="statRoutes">0</span> Routes</div>
         <div class="stat-card"><span id="statTrips">0</span> Today's Trips</div>
       </div>
+      <input type="text" id="adminFilterRoute" placeholder="Filter by route..." style="width:100%;padding:6px;margin:5px 0;border:2px solid #ddd;border-radius:8px;">
       <div id="adminBusList" style="max-height:200px;overflow-y:auto;"></div>
+      <button id="addRouteBtn" class="btn btn-primary" style="width:auto;padding:8px 16px;margin:10px 0;">➕ Add New Route</button>
+      <div id="routeMgmtList" style="max-height:200px;overflow-y:auto;margin-top:10px;"></div>
       <button id="closeAdmin" class="btn btn-secondary" style="width:auto;padding:8px 16px;margin-top:10px;">Close</button>
     </div>
 
@@ -201,18 +230,24 @@
 
     <!-- FOOTER -->
     <footer style="text-align:center;padding:16px;font-size:0.7rem;color:#999;">
-      <a href="/privacy.html" style="color:#666;">Privacy</a> · <a href="/terms.html" style="color:#666;">Terms</a> · v7.0
+      <a href="/privacy.html" style="color:#666;">Privacy</a> · <a href="/terms.html" style="color:#666;">Terms</a> · v14.1
     </footer>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+  <!-- Firebase SDKs -->
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-performance.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-crashlytics.js"></script>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+
   <script src="js/firebase-config.js?v=16"></script>
   <script src="js/routes.js?v=16"></script>
   <script type="module" src="js/app.js?v=16"></script>
+
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
